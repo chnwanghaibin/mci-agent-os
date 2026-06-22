@@ -34,8 +34,8 @@ import {
   X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { cellKey, defaultState, functionalFlows, workFlows } from "./data";
-import type { Agent, AgentStatus, ApiKeyRecord, AppState, EvalRun, FailureCluster, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RubricCriterion, RuleItem, RuleLibraryItem, ToolAsset, ViewName } from "./types";
+import { cellKey, defaultState, functionalFlows, skills as defaultSkills, workFlows } from "./data";
+import type { Agent, AgentStatus, AnchorField, ApiKeyRecord, AppState, EvalRun, FailureCluster, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RubricCriterion, RuleItem, RuleLibraryItem, Skill, ToolAsset, ViewName } from "./types";
 
 const STORAGE_KEY = "dgt-agent-platform-demo";
 
@@ -424,6 +424,7 @@ function migrateState(partial: Partial<AppState>): AppState {
     tools: partial.tools ?? defaultState.tools,
     evalRuns: partial.evalRuns ?? defaultState.evalRuns,
     apiKeys: partial.apiKeys ?? defaultState.apiKeys,
+    skills: partial.skills ?? defaultSkills,
   };
 }
 
@@ -1737,6 +1738,7 @@ export default function App() {
           <NavButton icon={<Database />} label="知识库" active={view === "knowledge"} onClick={() => setView("knowledge")} />
           <NavButton icon={<Settings2 />} label="规则库" active={view === "rules"} onClick={() => setView("rules")} />
           <NavButton icon={<Wrench />} label="工具库" active={view === "tools"} onClick={() => setView("tools")} />
+          <NavButton icon={<Layers3 />} label="Skill 库" active={view === "skills"} onClick={() => setView("skills")} />
           <NavButton icon={<CheckCircle2 />} label="评估追踪" active={view === "evaluation"} onClick={() => setView("evaluation")} />
           <NavButton icon={<Code2 />} label="接口中心" active={view === "api"} onClick={() => setView("api")} />
         </nav>
@@ -1818,6 +1820,31 @@ export default function App() {
           <EvaluationPage agents={state.agents} evalRuns={state.evalRuns} onRunEvaluation={runEvaluation} onOpenAgent={openAgent} />
         )}
 
+        {view === "skills" && (
+          <SkillLibraryPage
+            skills={state.skills}
+            onCreateSkill={() => {
+              setState((s) => ({
+                ...s,
+                skills: [
+                  {
+                    id: `skill-${Date.now()}`,
+                    name: "新建 Skill",
+                    version: "v0.1",
+                    description: "填写该 Skill 的用途和适用场景。",
+                    category: "通用",
+                    steps: [],
+                    linkedAgentCount: 0,
+                    updatedAt: nowLabel(),
+                  },
+                  ...s.skills,
+                ],
+              }));
+              notify("Skill 已创建");
+            }}
+          />
+        )}
+
         {view === "api" && (
           <ApiCenterPage
             agents={state.agents}
@@ -1857,6 +1884,7 @@ export default function App() {
             onAttachTool={attachToolToAgent}
             onDetachTool={detachToolFromAgent}
             onPromoteRule={promoteRuleToLibrary}
+            skills={state.skills}
           />
         )}
       </main>
@@ -3587,6 +3615,206 @@ function ToolsPage({
   );
 }
 
+// ── Skill Library Page ────────────────────────────────────────────────────────
+
+function AnchorFieldBadge({ field }: { field: import("./types").AnchorField }) {
+  const typeColor: Record<string, string> = {
+    enum: "#7c3aed",
+    bool: "#0369a1",
+    text: "#065f46",
+    number: "#92400e",
+    list: "#9f1239",
+  };
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: 11,
+        padding: "2px 7px",
+        borderRadius: 20,
+        background: typeColor[field.type] + "18",
+        color: typeColor[field.type],
+        fontWeight: 600,
+        border: `1px solid ${typeColor[field.type]}30`,
+      }}
+    >
+      <span style={{ opacity: 0.7 }}>{field.key}</span>
+      <span>·</span>
+      <span>{field.type}</span>
+      {field.required && <span style={{ color: "#ef4444", fontSize: 10 }}>*</span>}
+    </span>
+  );
+}
+
+function SkillCard({ skill }: { skill: import("./types").Skill }) {
+  const [expanded, setExpanded] = useState(false);
+  const totalFields = skill.steps.reduce((sum, s) => sum + (s.anchor?.fields.length ?? 0), 0);
+
+  const categoryColor: Record<string, string> = {
+    合规: "#7c3aed",
+    风控: "#dc2626",
+    运维: "#2563eb",
+    通用: "#6b7280",
+  };
+  const cat = skill.category;
+  const catColor = categoryColor[cat] ?? "#6b7280";
+
+  return (
+    <div className="skill-card">
+      <div className="skill-card-header">
+        <div className="skill-card-title-row">
+          <span className="skill-card-name">{skill.name}</span>
+          <span className="skill-version-badge">{skill.version}</span>
+          <span
+            className="skill-category-badge"
+            style={{ background: catColor + "18", color: catColor, border: `1px solid ${catColor}30` }}
+          >
+            {skill.category}
+          </span>
+        </div>
+        <div className="skill-card-meta">
+          <span>{skill.steps.length} 步骤</span>
+          <span>·</span>
+          <span>{totalFields} 输出字段</span>
+          <span>·</span>
+          <span>已关联 {skill.linkedAgentCount} 个 Agent</span>
+          <span>·</span>
+          <span>更新于 {skill.updatedAt}</span>
+        </div>
+        <p className="skill-card-desc">{skill.description}</p>
+        <button
+          className="ghost-button compact"
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          style={{ marginTop: 4, fontSize: 12 }}
+        >
+          {expanded ? "收起步骤 ▲" : `展开步骤 (${skill.steps.length}) ▼`}
+        </button>
+      </div>
+      {expanded && (
+        <div className="skill-steps-list">
+          {skill.steps.map((step, i) => (
+            <div key={i} className="skill-step-row">
+              <div className="skill-step-index">{i + 1}</div>
+              <div className="skill-step-body">
+                <div className="skill-step-title">{step.title}</div>
+                <div className="skill-step-desc">{step.description}</div>
+                {step.anchor && step.anchor.fields.length > 0 && (
+                  <div className="skill-step-anchor">
+                    <span className="anchor-label">输出锚点{step.anchor.strict ? "（严格）" : ""}：</span>
+                    <div className="anchor-field-badges">
+                      {step.anchor.fields.map((f) => (
+                        <AnchorFieldBadge key={f.id} field={f} />
+                      ))}
+                    </div>
+                    {step.anchor.fields.some((f) => f.constraint) && (
+                      <div className="anchor-constraints">
+                        {step.anchor.fields
+                          .filter((f) => f.constraint)
+                          .map((f) => (
+                            <div key={f.id} className="anchor-constraint-row">
+                              <span className="anchor-constraint-key">{f.key}：</span>
+                              <span className="anchor-constraint-val">{f.constraint}</span>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SkillLibraryPage({
+  skills,
+  onCreateSkill,
+}: {
+  skills: import("./types").Skill[];
+  onCreateSkill: () => void;
+}) {
+  const [filter, setFilter] = useState("");
+  const filtered = skills.filter(
+    (s) =>
+      filter === "" ||
+      s.name.includes(filter) ||
+      s.category.includes(filter) ||
+      s.description.includes(filter),
+  );
+
+  const categoryGroups = Array.from(new Set(skills.map((s) => s.category)));
+
+  return (
+    <section className="page-section">
+      <div className="section-header">
+        <div>
+          <div className="section-title">
+            <Layers3 size={18} />
+            Skill 库
+          </div>
+          <div className="section-subtitle">
+            可复用的标准化步骤包，每个 Skill 含 SOP 步骤 + 输出锚点定义，可一键导入任意 Agent 工作流。
+          </div>
+        </div>
+        <button className="primary-button" type="button" onClick={onCreateSkill}>
+          + 新建 Skill
+        </button>
+      </div>
+
+      <div className="skill-library-stats">
+        {categoryGroups.map((cat) => {
+          const count = skills.filter((s) => s.category === cat).length;
+          return (
+            <div key={cat} className="skill-stat-chip">
+              <span className="skill-stat-cat">{cat}</span>
+              <span className="skill-stat-count">{count}</span>
+            </div>
+          );
+        })}
+        <div className="skill-stat-chip">
+          <span className="skill-stat-cat">全部</span>
+          <span className="skill-stat-count">{skills.length}</span>
+        </div>
+      </div>
+
+      <div className="tool-search-bar" style={{ marginBottom: 16 }}>
+        <input
+          className="rule-search-input"
+          placeholder="搜索 Skill 名称、分类或描述…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+      </div>
+
+      <div className="skill-concept-banner">
+        <div className="skill-concept-title">SOP + 输出锚点 = 稳定工作流</div>
+        <div className="skill-concept-body">
+          每个工作流步骤通过 <strong>输出锚点（Output Anchor）</strong> 定义结构化输出字段（枚举 / 布尔 / 文本 / 数值 / 列表），约束 Agent 每步必须产出的内容，而不限制推理过程。
+          Skill 是步骤 + 锚点的命名版本包，可跨 Agent 复用，并通过版本号管理迭代。
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="empty-hint">没有匹配的 Skill</div>
+      ) : (
+        <div className="skill-card-list">
+          {filtered.map((skill) => (
+            <SkillCard key={skill.id} skill={skill} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function EvaluationPage({
   agents,
   evalRuns,
@@ -3973,6 +4201,7 @@ function AgentDetailPage({
   onAttachTool,
   onDetachTool,
   onPromoteRule,
+  skills,
 }: {
   agent: Agent;
   docs: KnowledgeDoc[];
@@ -3998,6 +4227,7 @@ function AgentDetailPage({
   onAttachTool: (agentId: string, toolAssetId: string) => void;
   onDetachTool: (agentId: string, toolItemId: string) => void;
   onPromoteRule: (agentId: string, localRuleId: string) => void;
+  skills: Skill[];
 }) {
   const [feedbackScore, setFeedbackScore] = useState(agent.feedbackScore ?? 5);
   const [feedbackNote, setFeedbackNote] = useState(agent.feedbackNote ?? "输出建议更具体，适合纳入下一轮优化。");
@@ -4067,6 +4297,62 @@ function AgentDetailPage({
   const paneClass = (sectionId: string, extra = "") =>
     `detail-pane-item detail-pane-${sectionId.replace("detail-", "")} ${activeDetailSection === sectionId ? `active slide-${detailSlideDirection}` : ""} ${extra}`.trim();
 
+  const [anchorExpanded, setAnchorExpanded] = useState<Set<string>>(new Set());
+  const toggleAnchorExpanded = (stepId: string) =>
+    setAnchorExpanded((prev) => { const next = new Set(prev); next.has(stepId) ? next.delete(stepId) : next.add(stepId); return next; });
+
+  const addAnchorField = (stepId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : {
+          ...s,
+          anchor: {
+            strict: s.anchor?.strict ?? true,
+            fields: [...(s.anchor?.fields ?? []), { id: `af-${Date.now()}`, key: "新字段", type: "text" as const, required: true, description: "" }],
+          },
+        },
+      ),
+    }));
+  };
+
+  const removeAnchorField = (stepId: string, fieldId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : { ...s, anchor: { ...s.anchor!, fields: s.anchor!.fields.filter((f) => f.id !== fieldId) } },
+      ),
+    }));
+  };
+
+  const updateAnchorField = (stepId: string, fieldId: string, patch: Partial<AnchorField>) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : { ...s, anchor: { ...s.anchor!, fields: s.anchor!.fields.map((f) => f.id === fieldId ? { ...f, ...patch } : f) } },
+      ),
+    }));
+  };
+
+  const applySkillToWorkflow = (skillId: string) => {
+    const skill = skills.find((sk) => sk.id === skillId);
+    if (!skill) return;
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: [
+        ...item.workflow,
+        ...skill.steps.map((step, i) => ({
+          id: `sk-step-${Date.now()}-${i}`,
+          title: step.title,
+          description: step.description,
+          enabled: true,
+          skillRef: skillId,
+          anchor: step.anchor,
+        })),
+      ],
+    }));
+    onNotify(`已从 Skill「${skill.name}」引入 ${skill.steps.length} 个步骤`);
+  };
 
   const addGuardrail = () => {
     onUpdateAgent(agent.id, (item) => ({
@@ -4555,51 +4841,168 @@ function AgentDetailPage({
               <Route size={16} />
               工作流步骤
             </span>
-            <button className="ghost-button compact" type="button" onClick={addWorkflowStep}>
-              <Plus size={15} />
-              添加步骤
-            </button>
+            <div className="workflow-header-actions">
+              {skills.length > 0 && (
+                <select
+                  className="skill-apply-select"
+                  defaultValue=""
+                  onChange={(e) => { if (e.target.value) { applySkillToWorkflow(e.target.value); e.target.value = ""; } }}
+                  title="从 Skill 库导入步骤组"
+                >
+                  <option value="" disabled>从 Skill 库导入…</option>
+                  {skills.map((sk) => (
+                    <option key={sk.id} value={sk.id}>{sk.name} {sk.version}</option>
+                  ))}
+                </select>
+              )}
+              <button className="ghost-button compact" type="button" onClick={addWorkflowStep}>
+                <Plus size={15} />
+                添加步骤
+              </button>
+            </div>
           </div>
           <div className="workflow-list">
-            {agent.workflow.map((step, index) => (
-              <div className="workflow-step" key={step.id}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={step.enabled}
-                    onChange={() =>
+            {agent.workflow.map((step, index) => {
+              const skillSource = step.skillRef ? skills.find((sk) => sk.id === step.skillRef) : undefined;
+              const isAnchorOpen = anchorExpanded.has(step.id);
+              const fieldCount = step.anchor?.fields.length ?? 0;
+              return (
+                <div className="workflow-step workflow-step-v2" key={step.id}>
+                  <div className="workflow-step-header">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={step.enabled}
+                        onChange={() =>
+                          onUpdateAgent(agent.id, (item) => ({
+                            ...item,
+                            workflow: item.workflow.map((t) => (t.id === step.id ? { ...t, enabled: !t.enabled } : t)),
+                          }))
+                        }
+                      />
+                      <span>{index + 1}</span>
+                    </label>
+                    <input
+                      className="workflow-step-title"
+                      value={step.title}
+                      onChange={(event) =>
+                        onUpdateAgent(agent.id, (item) => ({
+                          ...item,
+                          workflow: item.workflow.map((t) => (t.id === step.id ? { ...t, title: event.target.value } : t)),
+                        }))
+                      }
+                    />
+                    {skillSource && (
+                      <span className="workflow-skill-badge">
+                        <Layers3 size={11} />
+                        {skillSource.name}
+                      </span>
+                    )}
+                    <button
+                      className={`ghost-button compact workflow-anchor-toggle ${isAnchorOpen ? "active" : ""}`}
+                      type="button"
+                      onClick={() => toggleAnchorExpanded(step.id)}
+                      title="配置输出锚点"
+                    >
+                      <ShieldCheck size={13} />
+                      输出锚点{fieldCount > 0 ? ` (${fieldCount})` : ""}
+                    </button>
+                    <button className="ghost-button compact danger-button" type="button" onClick={() => deleteWorkflowStep(step.id)}>
+                      删除
+                    </button>
+                  </div>
+
+                  <textarea
+                    className="workflow-step-desc"
+                    value={step.description}
+                    onChange={(event) =>
                       onUpdateAgent(agent.id, (item) => ({
                         ...item,
-                        workflow: item.workflow.map((target) => (target.id === step.id ? { ...target, enabled: !target.enabled } : target)),
+                        workflow: item.workflow.map((t) => (t.id === step.id ? { ...t, description: event.target.value } : t)),
                       }))
                     }
+                    rows={2}
+                    placeholder="描述这一步的业务目的（自由文本，Agent 依此执行）"
                   />
-                  <span>{index + 1}</span>
-                </label>
-                <input
-                  value={step.title}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      workflow: item.workflow.map((target) => (target.id === step.id ? { ...target, title: event.target.value } : target)),
-                    }))
-                  }
-                />
-                <textarea
-                  value={step.description}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      workflow: item.workflow.map((target) => (target.id === step.id ? { ...target, description: event.target.value } : target)),
-                    }))
-                  }
-                  rows={2}
-                />
-                <button className="ghost-button compact danger-button" type="button" onClick={() => deleteWorkflowStep(step.id)}>
-                  删除
-                </button>
-              </div>
-            ))}
+
+                  {isAnchorOpen && (
+                    <div className="anchor-editor">
+                      <div className="anchor-editor-head">
+                        <span>输出锚点字段</span>
+                        <label className="anchor-strict-toggle">
+                          <input
+                            type="checkbox"
+                            checked={step.anchor?.strict ?? true}
+                            onChange={(e) =>
+                              onUpdateAgent(agent.id, (item) => ({
+                                ...item,
+                                workflow: item.workflow.map((t) =>
+                                  t.id === step.id ? { ...t, anchor: { ...(t.anchor ?? { fields: [] }), strict: e.target.checked } } : t,
+                                ),
+                              }))
+                            }
+                          />
+                          严格模式（字段缺失即失败）
+                        </label>
+                      </div>
+                      {(step.anchor?.fields ?? []).map((field) => (
+                        <div className="anchor-field-row" key={field.id}>
+                          <input
+                            className="anchor-field-key"
+                            value={field.key}
+                            placeholder="字段名"
+                            onChange={(e) => updateAnchorField(step.id, field.id, { key: e.target.value })}
+                          />
+                          <select
+                            value={field.type}
+                            onChange={(e) => updateAnchorField(step.id, field.id, { type: e.target.value as AnchorField["type"] })}
+                          >
+                            <option value="enum">enum</option>
+                            <option value="bool">bool</option>
+                            <option value="text">text</option>
+                            <option value="number">number</option>
+                            <option value="list">list</option>
+                          </select>
+                          {field.type === "enum" && (
+                            <input
+                              className="anchor-field-options"
+                              value={field.options?.join(",") ?? ""}
+                              placeholder="选项A,选项B,选项C"
+                              onChange={(e) => updateAnchorField(step.id, field.id, { options: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
+                            />
+                          )}
+                          <label className="anchor-required">
+                            <input
+                              type="checkbox"
+                              checked={field.required}
+                              onChange={(e) => updateAnchorField(step.id, field.id, { required: e.target.checked })}
+                            />
+                            必填
+                          </label>
+                          <input
+                            className="anchor-field-desc"
+                            value={field.description}
+                            placeholder="字段含义说明"
+                            onChange={(e) => updateAnchorField(step.id, field.id, { description: e.target.value })}
+                          />
+                          <button
+                            className="ghost-button compact danger-button"
+                            type="button"
+                            onClick={() => removeAnchorField(step.id, field.id)}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                      <button className="ghost-button compact anchor-add-field" type="button" onClick={() => addAnchorField(step.id)}>
+                        <Plus size={13} />
+                        添加字段
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </section>
 

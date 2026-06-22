@@ -1,5 +1,5 @@
 export type AgentStatus = "draft" | "trained" | "published";
-export type ViewName = "matrix" | "agents" | "knowledge" | "rules" | "tools" | "evaluation" | "api" | "detail";
+export type ViewName = "matrix" | "agents" | "knowledge" | "rules" | "tools" | "evaluation" | "api" | "detail" | "skills";
 
 export interface FlowItem {
   id: string;
@@ -43,11 +43,52 @@ export interface ToolItem {
   enabled: boolean;
 }
 
+export interface AnchorField {
+  id: string;
+  key: string;
+  type: "enum" | "bool" | "text" | "number" | "list";
+  options?: string[];
+  required: boolean;
+  description: string;
+  constraint?: string;
+}
+
+export interface OutputAnchor {
+  fields: AnchorField[];
+  strict: boolean;
+}
+
+export interface RoutingRule {
+  id: string;
+  condition: string;
+  nextStepId: string;
+}
+
 export interface WorkflowStep {
   id: string;
   title: string;
   description: string;
   enabled: boolean;
+  skillRef?: string;
+  anchor?: OutputAnchor;
+  routing?: RoutingRule[];
+}
+
+export interface SkillStep {
+  title: string;
+  description: string;
+  anchor?: OutputAnchor;
+}
+
+export interface Skill {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  category: string;
+  steps: SkillStep[];
+  linkedAgentCount: number;
+  updatedAt: string;
 }
 
 export interface TimelineItem {
@@ -222,4 +263,5 @@ export interface AppState {
   tools: ToolAsset[];
   evalRuns: EvalRun[];
   apiKeys: ApiKeyRecord[];
+  skills: Skill[];
 }

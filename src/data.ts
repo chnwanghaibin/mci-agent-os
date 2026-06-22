@@ -1,4 +1,4 @@
-import type { Agent, ApiKeyRecord, AppState, EvalRun, FlowItem, KnowledgeDoc, RuleLibraryItem, ToolAsset } from "./types";
+import type { Agent, ApiKeyRecord, AppState, EvalRun, FlowItem, KnowledgeDoc, RuleLibraryItem, Skill, ToolAsset } from "./types";
 
 
 export const functionalFlows: FlowItem[] = [
@@ -567,6 +567,103 @@ const shallowAgents: Agent[] = shallowPlacements.map(([id, name, type, work, fun
   shallow: true,
 }));
 
+export const skills: Skill[] = [
+  {
+    id: "skill-compliance-prereview",
+    name: "合规性预审",
+    version: "v1.2",
+    description: "适用于所有现金流合同的前置合规检查，覆盖收益分配和披露义务两个核心审查点。",
+    category: "合规",
+    linkedAgentCount: 3,
+    updatedAt: "2026-06-15",
+    steps: [
+      {
+        title: "收益分配条款审查",
+        description: "检查现金流收益分配比例、利润触发条件和不平等条款。",
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "f1", key: "conclusion", type: "enum", options: ["通过", "需关注", "拒绝"], required: true, description: "综合判断该条款是否合规" },
+            { id: "f2", key: "risk_level", type: "enum", options: ["低", "中", "高"], required: true, description: "识别出的风险等级" },
+            { id: "f3", key: "risk_items", type: "list", required: false, description: "发现的风险点，每条一句话" },
+            { id: "f4", key: "requires_human_review", type: "bool", required: true, description: "是否需要人工复核", constraint: "若 risk_level=高 则必须为 true" },
+          ],
+        },
+      },
+      {
+        title: "披露义务核查",
+        description: "检查披露材料版本是否与合同签署日期在同一报告期，数据授权范围是否一致。",
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "f5", key: "disclosure_ok", type: "bool", required: true, description: "披露版本与签署日期是否在同一报告期" },
+            { id: "f6", key: "authorization_scope_match", type: "bool", required: true, description: "数据授权范围是否与披露口径一致" },
+            { id: "f7", key: "conclusion", type: "enum", options: ["通过", "需关注", "拒绝"], required: true, description: "综合披露义务审查结论" },
+          ],
+        },
+      },
+    ],
+  },
+  {
+    id: "skill-risk-summary",
+    name: "风险等级评估",
+    version: "v1.0",
+    description: "汇总各子步骤的风险识别结果，给出整体风险等级和最终处置建议。",
+    category: "风控",
+    linkedAgentCount: 2,
+    updatedAt: "2026-06-10",
+    steps: [
+      {
+        title: "综合风险评估",
+        description: "综合所有前置步骤的风险识别结果，给出整体风险等级和最终处置建议。",
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "f8", key: "overall_risk", type: "enum", options: ["低", "中", "高", "极高"], required: true, description: "综合各前置步骤的最终风险等级" },
+            { id: "f9", key: "disposition", type: "enum", options: ["自动通过", "人工复核", "直接拒绝"], required: true, description: "推荐处置方式" },
+            { id: "f10", key: "summary", type: "text", required: true, description: "一句话风险摘要，用于报告输出" },
+          ],
+        },
+      },
+    ],
+  },
+  {
+    id: "skill-ticket-triage",
+    name: "工单智能分诊",
+    version: "v2.1",
+    description: "快速识别工单类型、确定责任方和优先级，适用于系统运维类 Agent。",
+    category: "运维",
+    linkedAgentCount: 1,
+    updatedAt: "2026-05-28",
+    steps: [
+      {
+        title: "工单类型识别",
+        description: "识别工单属于 COP、结算、门店数据、账户权限等问题类型，提取关键字段。",
+        anchor: {
+          strict: false,
+          fields: [
+            { id: "f11", key: "ticket_type", type: "enum", options: ["COP", "结算异常", "门店数据", "账户权限", "其他"], required: true, description: "工单主要问题类型" },
+            { id: "f12", key: "affected_stores", type: "number", required: false, description: "受影响门店数量（不适用时填 0）" },
+            { id: "f13", key: "urgency", type: "enum", options: ["低", "中", "高", "阻塞"], required: true, description: "紧急程度" },
+          ],
+        },
+      },
+      {
+        title: "责任方路由",
+        description: "根据工单类型和影响范围，推荐对应的处理团队和 SLA 优先级。",
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "f14", key: "owner_team", type: "text", required: true, description: "推荐的责任方团队" },
+            { id: "f15", key: "priority_level", type: "enum", options: ["P1", "P2", "P3", "P4"], required: true, description: "SLA 优先级" },
+            { id: "f16", key: "reason", type: "text", required: true, description: "路由原因说明" },
+          ],
+        },
+      },
+    ],
+  },
+];
+
 export const defaultState: AppState = {
   agents: [...mainAgents, ...shallowAgents],
   docs,
@@ -574,4 +671,5 @@ export const defaultState: AppState = {
   tools,
   evalRuns,
   apiKeys,
+  skills,
 };
