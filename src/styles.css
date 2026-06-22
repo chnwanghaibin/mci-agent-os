@@ -3102,7 +3102,7 @@ textarea:focus {
 
 .timeline-panel .timeline-item {
   display: grid;
-  grid-template-columns: 132px minmax(0, 1fr);
+  grid-template-columns: 112px minmax(0, 1fr);
   gap: 10px 18px;
   border: 1px solid var(--line);
   border-left: 4px solid var(--green);
@@ -3146,7 +3146,7 @@ textarea:focus {
 }
 
 .timeline-panel .timeline-metric-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
 }
 
 .timeline-metric {
