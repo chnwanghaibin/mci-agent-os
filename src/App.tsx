@@ -1,0 +1,4344 @@
+import {
+  Activity,
+  ArrowLeft,
+  ArrowRight,
+  Bot,
+  CheckCircle2,
+  Code2,
+  Copy,
+  Database,
+  FileText,
+  Filter,
+  Grid3X3,
+  Layers3,
+  PlayCircle,
+  Plus,
+  PowerOff,
+  RefreshCw,
+  Rocket,
+  Route,
+  Save,
+  Search,
+  Settings2,
+  ShieldCheck,
+  Sparkles,
+  Star,
+  Trash2,
+  Upload,
+  Wrench,
+  X,
+} from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { cellKey, defaultState, functionalFlows, workFlows } from "./data";
+import type { Agent, AgentStatus, ApiKeyRecord, AppState, EvalRun, KnowledgeDoc, RuleItem, RuleLibraryItem, ToolAsset, ViewName } from "./types";
+
+const STORAGE_KEY = "dgt-agent-platform-demo";
+
+const statusCopy: Record<AgentStatus, string> = {
+  draft: "待训练",
+  trained: "已训练",
+  published: "已发布",
+};
+
+const trainingStepCatalog = [
+  {
+    title: "样例集入库",
+    description: "载入标准案例、反例、预期输出和人工反馈样本，建立本轮训练基线。",
+    system: "Dataset Orchestrator",
+  },
+  {
+    title: "知识检索校准",
+    description: "检查关联知识库覆盖度、片段召回和业务标签命中，修正检索优先级。",
+    system: "Retrieval Evaluator",
+  },
+  {
+    title: "规则边界验证",
+    description: "逐条验证启用规则、优先级、人工复核条件和低置信度处理边界。",
+    system: "Rule Guardrail Engine",
+  },
+  {
+    title: "工具链 Dry-run",
+    description: "模拟调用知识检索、规则校验、报告生成、路由和人工复核工具。",
+    system: "Tool Runtime Sandbox",
+  },
+  {
+    title: "回归评测",
+    description: "运行测试用例库，比较训练前后输出质量、通过率和失败用例原因。",
+    system: "Evaluation Harness",
+  },
+  {
+    title: "生成版本报告",
+    description: "固化版本号、质量分、改动摘要、风险项和下一轮优化建议。",
+    system: "Version Reporter",
+  },
+];
+const trainingSteps = trainingStepCatalog.map((step) => step.title);
+const evaluationStageCatalog = [
+  {
+    title: "用例集装载",
+    description: "读取当前 Agent 的测试用例、状态标签和预期输出，建立本次评估样本池。",
+    system: "Case Loader",
+  },
+  {
+    title: "结构化输出校验",
+    description: "检查输出字段、结论格式、风险解释和人工复核提示是否满足契约。",
+    system: "Output Contract Check",
+  },
+  {
+    title: "知识与规则命中",
+    description: "核验知识片段、启用规则、优先级和工具调用证据是否可追溯。",
+    system: "Evidence Auditor",
+  },
+  {
+    title: "回归评分",
+    description: "计算通过率、失败用例、质量分、稳定性和发布门槛状态。",
+    system: "Regression Scorer",
+  },
+  {
+    title: "生成评估反馈",
+    description: "沉淀评估记录、问题发现和下一轮优化建议。",
+    system: "Evaluation Reporter",
+  },
+];
+const toolCategoryOptions: ToolAsset["category"][] = ["检索", "规则", "生成", "路由", "人工复核", "接口"];
+
+type TrainingRunResult = {
+  runId: string;
+  versionBefore: string;
+  versionAfter: string;
+  scoreBefore: number;
+  scoreAfter: number;
+  delta: number;
+  passRate: number;
+  cases: number;
+  failed: number;
+  confidence: number;
+  knowledgeCoverage: number;
+  rulesVerified: number;
+  toolsVerified: number;
+  changes: string[];
+  recommendations: string[];
+  steps: Array<{ title: string; detail: string; metric: string; status: "完成" | "需关注" | "记录" }>;
+};
+
+type TrainingRunState = {
+  agentId: string;
+  startedAt: string;
+  completed: boolean;
+  result: TrainingRunResult;
+};
+
+type EvaluationRunResult = {
+  runId: string;
+  version: string;
+  score: number;
+  passRate: number;
+  cases: number;
+  failed: number;
+  structureScore: number;
+  evidenceScore: number;
+  stabilityScore: number;
+  gate: "通过" | "需优化";
+  notes: string;
+  findings: string[];
+  recommendations: string[];
+  stages: Array<{ title: string; detail: string; metric: string; status: "完成" | "需关注" | "记录" }>;
+};
+
+type EvaluationRunState = {
+  agentId: string;
+  startedAt: string;
+  completed: boolean;
+  result: EvaluationRunResult;
+};
+
+type AgentBlueprint = {
+  id: string;
+  name: string;
+  type: string;
+  purpose: string;
+  scenario: string;
+  inputSchema: string[];
+  outputSchema: string[];
+  qualityTarget: number;
+  latencyTarget: string;
+  knowledgeIds: string[];
+  ruleIds: string[];
+  prompt: string;
+  guardrails: string[];
+  tools: Agent["tools"];
+  workflow: Agent["workflow"];
+  testCases: Agent["testCases"];
+  trace: string[];
+  beforeReport: Agent["beforeReport"];
+  afterReport: Agent["afterReport"];
+};
+
+const agentBlueprints: AgentBlueprint[] = [
+  {
+    id: "contract",
+    name: "合同审查 Agent",
+    type: "合同审查",
+    purpose: "审查门店现金流合约中的收益分配、披露义务、提前终止、数据授权和争议处理条款。",
+    scenario: "合同登记前置审查",
+    inputSchema: ["合同正文", "门店主体", "现金流口径", "披露材料版本"],
+    outputSchema: ["风险等级", "命中条款", "修改建议", "人工复核点"],
+    qualityTarget: 92,
+    latencyTarget: "< 45s",
+    knowledgeIds: ["doc-contract-standard", "doc-cashflow-asset", "doc-compliance-check"],
+    ruleIds: ["rule-contract-revenue", "rule-contract-termination", "rule-contract-data-auth"],
+    prompt:
+      "你是滴灌通合同审查 Agent。请基于统一知识库、合同规则和业务上下文审查合同，必须输出风险等级、命中规则、修改建议和是否需要人工复核。不得生成未经验证的法律结论。",
+    guardrails: ["高风险条款必须触发人工复核", "不得引用未关联知识库", "输出必须包含风险等级和修改建议", "不确定时给出缺失字段清单"],
+    tools: [
+      { id: "search", name: "知识检索", description: "检索合同审查标准、现金流资产规则和披露清单。", enabled: true },
+      { id: "rule", name: "规则校验", description: "逐条命中收益分配、终止条款、数据授权等规则。", enabled: true },
+      { id: "report", name: "报告生成", description: "生成风险等级、修改建议和审查结论。", enabled: true },
+      { id: "handoff", name: "人工复核", description: "高风险或低置信度条款进入人工复核队列。", enabled: true },
+    ],
+    workflow: [
+      { id: "w1", title: "解析合同材料", description: "抽取主体、收益口径、终止条款、授权范围和附件版本。", enabled: true },
+      { id: "w2", title: "检索业务标准", description: "按节点、条款类型和标签检索统一知识库。", enabled: true },
+      { id: "w3", title: "执行规则校验", description: "对收益分配、披露一致性、提前终止、争议处理逐项打标。", enabled: true },
+      { id: "w4", title: "生成审查报告", description: "输出风险、证据、修改建议和人工复核建议。", enabled: true },
+    ],
+    testCases: [
+      {
+        id: "tc-contract-revenue",
+        name: "收益分配口径缺失",
+        input: "合同约定按经营收入分配，但未说明扣除项和周期。",
+        expected: "识别为高风险，要求补充扣除项、分配周期和披露一致性。",
+        status: "待验证",
+      },
+      {
+        id: "tc-contract-termination",
+        name: "提前终止条款过宽",
+        input: "发行方可单方提前终止且未写投资者保护安排。",
+        expected: "命中提前终止规则，建议人工复核。",
+        status: "待验证",
+      },
+    ],
+    trace: ["解析合同输入", "检索合同审查标准", "命中收益分配规则", "调用报告生成", "输出人工复核建议"],
+    beforeReport: {
+      title: "训练前输出",
+      summary: "只能给出笼统风险提示，缺少命中规则和可执行修改建议。",
+      score: 66,
+      bullets: ["风险解释不稳定", "条款证据引用不足", "人工复核边界不清"],
+      meta: [
+        { label: "风险识别", value: "中" },
+        { label: "建议可执行性", value: "弱" },
+      ],
+    },
+    afterReport: {
+      title: "训练后输出",
+      summary: "能按规则输出风险、证据、建议和复核动作，适合进入发布前评审。",
+      score: 92,
+      bullets: ["收益分配与终止条款识别稳定", "报告结构完整", "高风险可自动进入复核队列"],
+      meta: [
+        { label: "风险识别", value: "高" },
+        { label: "建议可执行性", value: "强" },
+      ],
+    },
+  },
+  {
+    id: "ticket",
+    name: "系统工单分诊 Agent",
+    type: "系统分诊",
+    purpose: "识别 COP、结算、门店数据、账户权限等系统问题，并给出优先级、责任方和处理摘要。",
+    scenario: "COP 工单入口",
+    inputSchema: ["工单标题", "问题描述", "影响门店", "业务环节"],
+    outputSchema: ["分类", "优先级", "责任团队", "处理摘要"],
+    qualityTarget: 89,
+    latencyTarget: "< 20s",
+    knowledgeIds: ["doc-cop-ticket", "doc-settlement"],
+    ruleIds: ["rule-ticket-settlement", "rule-ticket-batch-store", "rule-required-fields"],
+    prompt:
+      "你是系统工单分诊 Agent。请根据工单影响范围、业务环节和结算影响输出分类、优先级、责任团队和处理摘要。P0/P1 必须提示人工确认。",
+    guardrails: ["不得承诺修复时间", "P0/P1 必须人工确认", "责任团队必须来自已配置范围"],
+    tools: [
+      { id: "classify", name: "工单分类", description: "识别 COP、结算、门店数据、账户权限等问题类型。", enabled: true },
+      { id: "route", name: "责任方路由", description: "根据业务域和影响范围推荐处理团队。", enabled: true },
+      { id: "sla", name: "优先级判断", description: "结合现金流影响、门店范围和阻塞程度给出 P 级。", enabled: true },
+      { id: "summary", name: "摘要生成", description: "将原始工单改写为可执行处理摘要。", enabled: true },
+    ],
+    workflow: [
+      { id: "w1", title: "读取工单", description: "提取问题类型、影响范围和业务环节。", enabled: true },
+      { id: "w2", title: "判断优先级", description: "结合结算影响、门店数量和阻塞程度打 P 级。", enabled: true },
+      { id: "w3", title: "推荐责任方", description: "给出系统、数据、结算或业务运营团队。", enabled: true },
+      { id: "w4", title: "生成处理摘要", description: "输出可直接转派的简洁说明。", enabled: true },
+    ],
+    testCases: [
+      {
+        id: "tc-ticket-settlement",
+        name: "结算状态阻塞",
+        input: "12 家门店结算状态停留在待确认，影响当日结算。",
+        expected: "分类为结算异常，优先级至少 P1，责任方为结算支持。",
+        status: "待验证",
+      },
+      {
+        id: "tc-ticket-cop",
+        name: "COP 数据同步延迟",
+        input: "单门店 COP 今日流水未同步，暂未影响结算。",
+        expected: "分类为数据同步，优先级 P2 或 P3，建议数据平台排查。",
+        status: "待验证",
+      },
+    ],
+    trace: ["读取工单描述", "提取影响范围", "命中结算优先级规则", "路由责任团队", "生成摘要"],
+    beforeReport: {
+      title: "训练前输出",
+      summary: "能识别问题大类，但优先级和责任方解释不足。",
+      score: 64,
+      bullets: ["P1/P2 边界不稳定", "责任团队理由偏弱", "摘要不够可转派"],
+      meta: [
+        { label: "分类", value: "可用" },
+        { label: "路由", value: "待强化" },
+      ],
+    },
+    afterReport: {
+      title: "训练后输出",
+      summary: "能稳定输出分类、优先级、责任方和处理摘要。",
+      score: 89,
+      bullets: ["结算影响会自动提升优先级", "批量门店异常可识别", "摘要适合直接转派"],
+      meta: [
+        { label: "分类", value: "稳定" },
+        { label: "路由", value: "清晰" },
+      ],
+    },
+  },
+  {
+    id: "compliance",
+    name: "披露合规检查 Agent",
+    type: "合规检查",
+    purpose: "检查披露材料是否覆盖资产口径、历史回款、风险提示、投资者适当性和关键假设。",
+    scenario: "发行前材料复核",
+    inputSchema: ["披露材料", "资产包说明", "历史回款", "风险提示"],
+    outputSchema: ["缺口清单", "风险等级", "补充建议", "复核结论"],
+    qualityTarget: 88,
+    latencyTarget: "< 35s",
+    knowledgeIds: ["doc-compliance-check", "doc-cashflow-asset"],
+    ruleIds: ["rule-required-fields", "rule-contract-data-auth"],
+    prompt:
+      "你是披露合规检查 Agent。请检查材料是否覆盖资产口径、历史回款、风险提示、投资者适当性和关键假设，并输出缺口清单与补充建议。",
+    guardrails: ["不得替代合规负责人最终判断", "缺少证据必须列为缺口", "涉及投资者适当性必须提示复核"],
+    tools: [
+      { id: "checklist", name: "清单核对", description: "逐项核对披露与合规检查清单。", enabled: true },
+      { id: "evidence", name: "证据定位", description: "定位材料中的资产口径、历史回款和风险提示证据。", enabled: true },
+      { id: "gap", name: "缺口生成", description: "生成缺失信息和补充建议。", enabled: true },
+    ],
+    workflow: [
+      { id: "w1", title: "材料分段", description: "识别资产说明、回款记录、风险提示和适当性章节。", enabled: true },
+      { id: "w2", title: "清单核对", description: "逐项比对统一检查清单。", enabled: true },
+      { id: "w3", title: "输出缺口", description: "按风险等级输出缺口和补充建议。", enabled: true },
+    ],
+    testCases: [
+      {
+        id: "tc-compliance-risk",
+        name: "风险提示缺失",
+        input: "披露材料包含资产口径和历史回款，但未列关键风险提示。",
+        expected: "识别为高优先级缺口，建议补充风险提示章节。",
+        status: "待验证",
+      },
+    ],
+    trace: ["读取披露材料", "检索合规清单", "定位证据片段", "生成缺口清单"],
+    beforeReport: {
+      title: "训练前输出",
+      summary: "能发现明显缺口，但证据定位和风险分级较弱。",
+      score: 63,
+      bullets: ["缺口分类不稳定", "证据引用不足", "复核建议不明确"],
+      meta: [{ label: "结论", value: "待训练" }],
+    },
+    afterReport: {
+      title: "训练后输出",
+      summary: "能输出清晰的缺口清单、证据位置和补充建议。",
+      score: 88,
+      bullets: ["检查清单覆盖完整", "证据定位清晰", "适当性材料会触发复核"],
+      meta: [{ label: "结论", value: "可复核" }],
+    },
+  },
+];
+
+const emptyState = {
+  title: "待规划",
+  text: "该节点尚未配置主 Agent，可从 Agent 管理页创建，或在此选择已有 Agent 放置。",
+};
+
+function loadState(): AppState {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return defaultState;
+    const parsed = JSON.parse(saved) as Partial<AppState>;
+    return migrateState(parsed);
+  } catch {
+    return defaultState;
+  }
+}
+
+function migrateState(partial: Partial<AppState>): AppState {
+  const defaultAgentsById = Object.fromEntries(defaultState.agents.map((agent) => [agent.id, agent])) as Record<string, Agent>;
+  const mergedRules = partial.rules ?? defaultState.rules;
+  return {
+    agents: (partial.agents ?? defaultState.agents).map((agent) => ({
+      ...defaultAgentsById[agent.id],
+      ...agent,
+      name: cleanDemoText(agent.name ?? defaultAgentsById[agent.id]?.name ?? ""),
+      type: cleanDemoText(agent.type ?? defaultAgentsById[agent.id]?.type ?? ""),
+      purpose: cleanDemoText(agent.purpose ?? defaultAgentsById[agent.id]?.purpose ?? ""),
+      prompt: cleanDemoText(agent.prompt ?? defaultAgentsById[agent.id]?.prompt ?? ""),
+      inputSchema: agent.inputSchema ?? defaultAgentsById[agent.id]?.inputSchema,
+      outputSchema: agent.outputSchema ?? defaultAgentsById[agent.id]?.outputSchema,
+      tools: agent.tools ?? defaultAgentsById[agent.id]?.tools ?? [],
+      workflow: agent.workflow ?? defaultAgentsById[agent.id]?.workflow ?? [],
+      knowledgeIds: agent.knowledgeIds ?? defaultAgentsById[agent.id]?.knowledgeIds ?? [],
+      rules: normalizeAgentRules(agent.rules ?? defaultAgentsById[agent.id]?.rules ?? [], mergedRules),
+      timeline: (agent.timeline ?? defaultAgentsById[agent.id]?.timeline ?? []).map((item) => ({
+        ...item,
+        title: cleanDemoText(item.title),
+        description: cleanDemoText(item.description),
+      })),
+      apiCalls: agent.apiCalls ?? defaultAgentsById[agent.id]?.apiCalls ?? [],
+      testCases: agent.testCases ?? defaultAgentsById[agent.id]?.testCases ?? [],
+    })),
+    docs: partial.docs ?? defaultState.docs,
+    rules: mergedRules,
+    tools: partial.tools ?? defaultState.tools,
+    evalRuns: partial.evalRuns ?? defaultState.evalRuns,
+    apiKeys: partial.apiKeys ?? defaultState.apiKeys,
+  };
+}
+
+function cleanDemoText(value: string) {
+  return value.replace(/业务模板/g, "业务蓝图").replace(/模板/g, "蓝图").replace(/模版/g, "蓝图");
+}
+
+function normalizeAgentRules(agentRules: RuleItem[], library: RuleLibraryItem[]) {
+  return agentRules.map((rule) => {
+    const source = rule.sourceRuleId
+      ? library.find((item) => item.id === rule.sourceRuleId)
+      : library.find((item) => item.title === rule.title);
+    if (!source) return rule;
+    return {
+      ...rule,
+      sourceRuleId: source.id,
+      title: source.title,
+      description: source.description,
+      priority: source.priority,
+    };
+  });
+}
+
+function nextVersion(version: string) {
+  const match = version.match(/^v(\d+)\.(\d+)$/);
+  if (!match) return "v0.2";
+  return `v${match[1]}.${Number(match[2]) + 1}`;
+}
+
+function nowLabel() {
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date());
+}
+
+function rulesFromBlueprint(ruleIds: string[]): RuleItem[] {
+  return ruleIds
+    .map((ruleId) => defaultState.rules.find((rule) => rule.id === ruleId))
+    .filter((rule): rule is RuleLibraryItem => Boolean(rule))
+    .map((rule) => ({
+      id: `local-${rule.id}-${Date.now()}`,
+      sourceRuleId: rule.id,
+      title: rule.title,
+      description: rule.description,
+      priority: rule.priority,
+      enabled: true,
+    }));
+}
+
+function inferAgentBlueprint(name: string, type: string, purpose: string): AgentBlueprint {
+  const text = `${name} ${type} ${purpose}`.toLowerCase();
+  if (/(工单|cop|系统|结算|分诊|ticket)/i.test(text)) return agentBlueprints.find((item) => item.id === "ticket") ?? agentBlueprints[0];
+  if (/(合同|合约|条款|现金流|contract)/i.test(text)) return agentBlueprints.find((item) => item.id === "contract") ?? agentBlueprints[0];
+  if (/(合规|披露|风控|检查|compliance)/i.test(text)) return agentBlueprints.find((item) => item.id === "compliance") ?? agentBlueprints[0];
+  return agentBlueprints.find((item) => item.id === "contract") ?? agentBlueprints[0];
+}
+
+function schemaToText(items: string[]) {
+  return items.join("\n");
+}
+
+function parseSchemaText(value: string, fallback: string[]) {
+  const parsed = value
+    .split(/\n|,|，|、/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return parsed.length ? parsed : fallback;
+}
+
+function getAgentInputSchema(agent: Agent, blueprint = inferAgentBlueprint(agent.name, agent.type, agent.purpose)) {
+  return agent.inputSchema?.length ? agent.inputSchema : blueprint.inputSchema;
+}
+
+function getAgentOutputSchema(agent: Agent, blueprint = inferAgentBlueprint(agent.name, agent.type, agent.purpose)) {
+  return agent.outputSchema?.length ? agent.outputSchema : blueprint.outputSchema;
+}
+
+function buildTrainingRunResult(agent: Agent): TrainingRunResult {
+  const blueprint = inferAgentBlueprint(agent.name, agent.type, agent.purpose);
+  const enabledRules = agent.rules.filter((rule) => rule.enabled).length;
+  const enabledTools = agent.tools.filter((tool) => tool.enabled).length;
+  const passedCases = agent.testCases.filter((testCase) => testCase.status === "通过").length;
+  const cases = Math.max(agent.testCases.length, 1);
+  const passRate = Math.min(98, Math.round(((passedCases + Math.max(1, enabledRules)) / (cases + Math.max(1, enabledRules))) * 100));
+  const computedScore = Math.round((agent.afterReport.score + passRate + enabledTools * 2) / 2);
+  const incrementalLift = agent.score < 90 ? 6 : agent.score < 96 ? 3 : agent.score < 99 ? 1 : 0;
+  const scoreAfter = Math.min(99, Math.max(agent.afterReport.score, computedScore, agent.score + incrementalLift));
+  const versionAfter = nextVersion(agent.version);
+  const knowledgeCoverage = Math.min(100, Math.round((agent.knowledgeIds.length / Math.max(blueprint.knowledgeIds.length, 1)) * 100));
+  const ruleCoverage = Math.min(100, Math.round((enabledRules / Math.max(blueprint.ruleIds.length, 1)) * 100));
+  const toolCoverage = Math.min(100, Math.round((enabledTools / Math.max(agent.tools.length, 1)) * 100));
+  const confidence = Math.min(99, Math.round((scoreAfter + passRate + knowledgeCoverage + ruleCoverage + toolCoverage) / 5));
+  const delta = scoreAfter - agent.score;
+  const failed = Math.max(0, cases - Math.max(passedCases + 1, scoreAfter >= 90 ? cases : passedCases));
+  const toolsVerified = Math.max(enabledTools, agent.tools.length ? enabledTools : 1);
+  const primaryRule = agent.rules.find((rule) => rule.enabled)?.title ?? "关键业务规则";
+  const primaryDoc = agent.knowledgeIds.length ? `${agent.knowledgeIds.length} 份关联知识` : "待补充知识库";
+
+  const changes = [
+    `Prompt 对齐：强化“${blueprint.scenario}”场景下的输入解析、输出字段和人工复核边界。`,
+    `知识检索：校准 ${primaryDoc} 的召回顺序，优先引用与 ${agent.type} 直接相关的标准片段。`,
+    `规则边界：验证 ${enabledRules} 条启用规则，重点加固“${primaryRule}”的触发解释。`,
+    `工具链路：完成 ${toolsVerified}/${Math.max(agent.tools.length, 1)} 个工具的 Dry-run，确认结构化报告链路可执行。`,
+    `评测回归：运行 ${cases} 个用例，通过率 ${passRate}%，输出质量分从 ${agent.score} 提升至 ${scoreAfter}。`,
+  ];
+
+  const recommendations = [
+    failed > 0 ? `补充 ${failed} 条失败或低置信度用例，覆盖边界输入和反例。` : "将当前评测集固化为发布前回归基线。",
+    knowledgeCoverage < 100 ? "继续补齐知识库标签，提升跨业务节点召回稳定性。" : "保持知识库版本同步，后续重点监控新增规则漂移。",
+    enabledRules < blueprint.ruleIds.length ? "将缺失规则补入统一规则库，并在 Agent 详情页选择启用。" : "把高优先级规则纳入人工复核抽检清单。",
+  ];
+
+  return {
+    runId: `run-${Date.now()}`,
+    versionBefore: agent.version,
+    versionAfter,
+    scoreBefore: agent.score,
+    scoreAfter,
+    delta,
+    passRate,
+    cases,
+    failed,
+    confidence,
+    knowledgeCoverage,
+    rulesVerified: enabledRules,
+    toolsVerified,
+    changes,
+    recommendations,
+    steps: [
+      {
+        title: trainingStepCatalog[0].title,
+        detail: `载入 ${cases} 条测试用例、${passedCases} 条已通过样例和人工反馈样本，生成本轮评测基线。`,
+        metric: `${cases} cases`,
+        status: "完成",
+      },
+      {
+        title: trainingStepCatalog[1].title,
+        detail: `扫描 ${agent.knowledgeIds.length} 份关联知识，覆盖度 ${knowledgeCoverage}%，优先绑定高相关业务片段。`,
+        metric: `${knowledgeCoverage}% coverage`,
+        status: knowledgeCoverage >= 80 ? "完成" : "需关注",
+      },
+      {
+        title: trainingStepCatalog[2].title,
+        detail: `验证 ${enabledRules} 条启用规则的触发条件、优先级和人工复核边界。`,
+        metric: `${enabledRules} rules`,
+        status: enabledRules ? "完成" : "需关注",
+      },
+      {
+        title: trainingStepCatalog[3].title,
+        detail: `模拟执行 ${toolsVerified} 个工具调用，检查输入输出契约、错误回退和链路耗时。`,
+        metric: `${toolsVerified} calls`,
+        status: "完成",
+      },
+      {
+        title: trainingStepCatalog[4].title,
+        detail: `完成 ${cases} 个样例回归，失败 ${failed} 个，通过率 ${passRate}%，置信度 ${confidence}%。`,
+        metric: `${passRate}% pass`,
+        status: failed ? "需关注" : "完成",
+      },
+      {
+        title: trainingStepCatalog[5].title,
+        detail: `生成 ${versionAfter} 版本报告，记录质量分、改动点、建议和评估快照。`,
+        metric: `${agent.version} -> ${versionAfter}`,
+        status: "记录",
+      },
+    ],
+  };
+}
+
+function buildEvaluationRunResult(agent: Agent): EvaluationRunResult {
+  const blueprint = inferAgentBlueprint(agent.name, agent.type, agent.purpose);
+  const outputSchema = getAgentOutputSchema(agent, blueprint);
+  const cases = Math.max(agent.testCases?.length ?? 1, 1);
+  const failed = agent.testCases?.filter((item) => item.status !== "通过").length ?? 0;
+  const passed = Math.max(0, cases - failed);
+  const passRate = Math.round((passed / cases) * 100);
+  const enabledRules = agent.rules.filter((rule) => rule.enabled).length;
+  const enabledTools = agent.tools.filter((tool) => tool.enabled).length;
+  const knowledgeCoverage = Math.min(100, Math.round((agent.knowledgeIds.length / Math.max(blueprint.knowledgeIds.length, 1)) * 100));
+  const ruleCoverage = Math.min(100, Math.round((enabledRules / Math.max(blueprint.ruleIds.length, 1)) * 100));
+  const toolCoverage = Math.min(100, Math.round((enabledTools / Math.max(agent.tools.length, 1)) * 100));
+  const structureScore = Math.min(99, Math.round((agent.score + passRate + (agent.prompt.length > 180 ? 95 : 78)) / 3));
+  const evidenceScore = Math.min(99, Math.round((knowledgeCoverage + ruleCoverage + toolCoverage) / 3));
+  const stabilityScore = Math.min(99, Math.round((passRate + agent.score + (agent.trainedOnce ? 94 : 72)) / 3));
+  const score = Math.min(99, Math.max(60, Math.round((structureScore + evidenceScore + stabilityScore + agent.score) / 4)));
+  const gate: EvaluationRunResult["gate"] = failed === 0 && score >= 88 ? "通过" : "需优化";
+  const firstFailedCase = agent.testCases.find((item) => item.status !== "通过");
+  const notes =
+    gate === "通过"
+      ? "全部核心样例通过，可作为发布前或发布后回归基线。"
+      : `仍有 ${failed} 个样例需要补充规则、知识或 Prompt 约束。`;
+
+  const findings = [
+    `测试用例：共运行 ${cases} 个样例，通过 ${passed} 个，失败/需优化 ${failed} 个，通过率 ${passRate}%。`,
+    `结构契约：输出字段、结论格式和人工复核提示评分 ${structureScore}。`,
+    `证据链路：知识覆盖 ${knowledgeCoverage}%，规则覆盖 ${ruleCoverage}%，工具可用 ${toolCoverage}%。`,
+    firstFailedCase ? `重点关注：${firstFailedCase.name} 仍处于“${firstFailedCase.status}”，建议补充反例或规则解释。` : "当前用例库未发现阻塞项，可固化为回归基线。",
+  ];
+
+  const recommendations = [
+    failed > 0 ? "优先处理失败用例，补充输入边界、命中规则和期望输出。" : "将本次评估结果标记为稳定基线，后续训练后自动对比。",
+    evidenceScore < 88 ? "补强知识库标签和规则启用范围，避免输出无法追溯。" : "保持知识、规则、工具三类资产同步评估，监控配置漂移。",
+    stabilityScore < 90 ? "增加跨节点或跨业务线样例，提升发布后稳定性判断。" : "可进入发布前抽检或接口调用灰度验证。",
+  ];
+
+  return {
+    runId: `eval-${Date.now()}`,
+    version: agent.version,
+    score,
+    passRate,
+    cases,
+    failed,
+    structureScore,
+    evidenceScore,
+    stabilityScore,
+    gate,
+    notes,
+    findings,
+    recommendations,
+    stages: [
+      {
+        title: evaluationStageCatalog[0].title,
+        detail: `装载 ${cases} 个测试用例，包含 ${passed} 个已通过样例和 ${failed} 个待优化样例。`,
+        metric: `${cases} cases`,
+        status: "完成",
+      },
+      {
+        title: evaluationStageCatalog[1].title,
+        detail: `检查 ${outputSchema.join("、")} 等输出字段，结构化契约评分 ${structureScore}。`,
+        metric: `${structureScore} score`,
+        status: structureScore >= 88 ? "完成" : "需关注",
+      },
+      {
+        title: evaluationStageCatalog[2].title,
+        detail: `核验 ${agent.knowledgeIds.length} 份知识、${enabledRules} 条规则和 ${enabledTools} 个工具的可追溯证据。`,
+        metric: `${evidenceScore} evidence`,
+        status: evidenceScore >= 88 ? "完成" : "需关注",
+      },
+      {
+        title: evaluationStageCatalog[3].title,
+        detail: `通过率 ${passRate}%，质量分 ${score}，稳定性评分 ${stabilityScore}，门槛状态：${gate}。`,
+        metric: `${passRate}% pass`,
+        status: gate === "通过" ? "完成" : "需关注",
+      },
+      {
+        title: evaluationStageCatalog[4].title,
+        detail: "生成评估记录、问题发现和下一轮优化建议，并写入 Agent 版本时间线。",
+        metric: agent.version,
+        status: "记录",
+      },
+    ],
+  };
+}
+
+function makeNewAgent(name: string, purpose: string, type: string, inputSchema?: string[], outputSchema?: string[]): Agent {
+  const blueprint = inferAgentBlueprint(name, type, purpose);
+  return {
+    id: `agent-${Date.now()}`,
+    name,
+    type,
+    purpose,
+    status: "draft",
+    version: "v0.1",
+    score: 60,
+    caseUploaded: false,
+    trainedOnce: false,
+    feedbackSaved: false,
+    prompt: blueprint.prompt.replace(blueprint.name, name),
+    inputSchema: inputSchema?.length ? inputSchema : [...blueprint.inputSchema],
+    outputSchema: outputSchema?.length ? outputSchema : [...blueprint.outputSchema],
+    guardrails: [...blueprint.guardrails],
+    tools: blueprint.tools.map((tool) => ({ ...tool, id: `${tool.id}-${Date.now()}` })),
+    workflow: blueprint.workflow.map((step) => ({ ...step, id: `${step.id}-${Date.now()}` })),
+    knowledgeIds: [...blueprint.knowledgeIds],
+    rules: rulesFromBlueprint(blueprint.ruleIds),
+    beforeReport: blueprint.beforeReport,
+    afterReport: blueprint.afterReport,
+    trace: blueprint.trace,
+    timeline: [
+      { id: "created", title: "生成 Agent 蓝图", description: "已根据业务职责生成能力、工具、规则和评测集。", time: nowLabel() },
+    ],
+    apiCalls: [],
+    testCases: blueprint.testCases.map((testCase) => ({ ...testCase, id: `${testCase.id}-${Date.now()}` })),
+  };
+}
+
+export default function App() {
+  const [state, setState] = useState<AppState>(loadState);
+  const [view, setView] = useState<ViewName>("matrix");
+  const [selectedAgentId, setSelectedAgentId] = useState("contract-review");
+  const [selectedCellKey, setSelectedCellKey] = useState<string | null>(null);
+  const [highlightedCell, setHighlightedCell] = useState<string | null>(null);
+  const [trainingAgentId, setTrainingAgentId] = useState<string | null>(null);
+  const [trainingStep, setTrainingStep] = useState(0);
+  const [trainingRun, setTrainingRun] = useState<TrainingRunState | null>(null);
+  const [evaluationAgentId, setEvaluationAgentId] = useState<string | null>(null);
+  const [evaluationStep, setEvaluationStep] = useState(0);
+  const [evaluationRun, setEvaluationRun] = useState<EvaluationRunState | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const notify = (message: string) => {
+    setNotice(message);
+    window.setTimeout(() => {
+      setNotice((current) => (current === message ? null : current));
+    }, 2400);
+  };
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }, [state]);
+
+  const agentsById = useMemo(() => {
+    return Object.fromEntries(state.agents.map((agent) => [agent.id, agent])) as Record<string, Agent>;
+  }, [state.agents]);
+
+  const selectedAgent = agentsById[selectedAgentId] ?? state.agents[0];
+  const trainingRunAgent = trainingRun ? agentsById[trainingRun.agentId] : undefined;
+  const evaluationRunAgent = evaluationRun ? agentsById[evaluationRun.agentId] : undefined;
+
+  const updateAgent = (agentId: string, updater: (agent: Agent) => Agent) => {
+    setState((current) => ({
+      ...current,
+      agents: current.agents.map((agent) => (agent.id === agentId ? updater(agent) : agent)),
+    }));
+  };
+
+  const openAgent = (agentId: string) => {
+    setSelectedAgentId(agentId);
+    setSelectedCellKey(null);
+    setView("detail");
+  };
+
+  const findAgentByCell = (key: string) => state.agents.find((agent) => agent.matrixCellKey === key);
+
+  const openCell = (key: string) => {
+    const agent = findAgentByCell(key);
+    if (agent && !agent.shallow) {
+      openAgent(agent.id);
+      return;
+    }
+    setSelectedCellKey(key);
+  };
+
+  const completeTraining = (agentId: string, result: TrainingRunResult) => {
+    setState((current) => {
+      const target = current.agents.find((agent) => agent.id === agentId);
+      if (!target) return current;
+      return {
+        ...current,
+        agents: current.agents.map((agent) =>
+          agent.id === agentId
+            ? {
+                ...agent,
+                status: agent.status === "published" ? "published" : "trained",
+                version: result.versionAfter,
+                score: result.scoreAfter,
+                caseUploaded: true,
+                trainedOnce: true,
+                testCases: agent.testCases.map((testCase, index) => ({
+                  ...testCase,
+                  status: index === 0 || result.scoreAfter >= 90 ? "通过" : testCase.status,
+                })),
+                timeline: [
+                  {
+                    id: `train-${result.runId}`,
+                    title: `训练运行报告 ${result.versionAfter}`,
+                    description: `完成 ${trainingSteps.length} 个训练阶段，质量分 ${result.scoreBefore} -> ${result.scoreAfter}（${result.delta >= 0 ? "+" : ""}${result.delta}），通过率 ${result.passRate}%，置信度 ${result.confidence}%。`,
+                    time: nowLabel(),
+                    version: result.versionAfter,
+                    metrics: [
+                      { label: "质量分", value: `${result.scoreBefore} -> ${result.scoreAfter}`, tone: "green" },
+                      { label: "提升点", value: `${result.delta >= 0 ? "+" : ""}${result.delta}`, tone: result.delta >= 0 ? "green" : "amber" },
+                      { label: "通过率", value: `${result.passRate}%`, tone: result.passRate >= 90 ? "green" : "amber" },
+                      { label: "置信度", value: `${result.confidence}%`, tone: result.confidence >= 88 ? "green" : "amber" },
+                      { label: "知识覆盖", value: `${result.knowledgeCoverage}%`, tone: result.knowledgeCoverage >= 80 ? "green" : "amber" },
+                      { label: "版本", value: `${result.versionBefore} -> ${result.versionAfter}`, tone: "neutral" },
+                    ],
+                    changes: [...result.changes, ...result.recommendations.map((item) => `下一轮建议：${item}`)],
+                    steps: result.steps,
+                  },
+                  ...agent.timeline,
+                ],
+              }
+            : agent,
+        ),
+        evalRuns: [
+          {
+            id: `eval-train-${result.runId}`,
+            agentId,
+            suite: `${target.type} 训练回归集`,
+            score: result.scoreAfter,
+            passRate: result.passRate,
+            cases: result.cases,
+            failed: result.failed,
+            time: nowLabel(),
+            notes: `训练运行自动生成：${result.changes.slice(0, 2).join("；")}。`,
+          },
+          ...current.evalRuns,
+        ],
+      };
+    });
+    setTrainingRun((current) => (current?.agentId === agentId ? { ...current, completed: true, result } : current));
+    notify("训练完成，版本报告和评估记录已生成");
+  };
+
+  const startTraining = (agentId: string) => {
+    if (trainingAgentId) {
+      notify("已有训练任务运行中，请稍后再试");
+      return;
+    }
+    const target = agentsById[agentId];
+    if (!target) return;
+    const result = buildTrainingRunResult(target);
+    setTrainingAgentId(agentId);
+    setTrainingStep(0);
+    setTrainingRun({
+      agentId,
+      startedAt: nowLabel(),
+      completed: false,
+      result,
+    });
+    trainingSteps.forEach((_, index) => {
+      window.setTimeout(() => {
+        setTrainingStep(index);
+        if (index === trainingSteps.length - 1) {
+          window.setTimeout(() => {
+            completeTraining(agentId, result);
+            setTrainingAgentId(null);
+          }, 520);
+        }
+      }, index * 780);
+    });
+  };
+
+  const submitFeedback = (agentId: string, score: number, note: string) => {
+    updateAgent(agentId, (agent) => ({
+      ...agent,
+      feedbackSaved: true,
+      feedbackScore: score,
+      feedbackNote: note,
+      score: Math.min(99, Math.max(agent.score, agent.afterReport.score + score - 4)),
+      version: nextVersion(agent.version),
+      timeline: [
+        {
+          id: `feedback-${Date.now()}`,
+          title: "反馈已纳入下一轮优化",
+          description: `评分 ${score}/5：${note || "输出符合预期，进入下一轮优化样本。"}`,
+          time: nowLabel(),
+        },
+        ...agent.timeline,
+      ],
+    }));
+    notify("反馈已纳入下一轮优化");
+  };
+
+  const placeAgent = (agentId: string, targetCellKey: string, navigateAfterPublish = false) => {
+    const targetAgent = agentsById[agentId];
+    const occupant = state.agents.find((agent) => agent.matrixCellKey === targetCellKey && agent.id !== agentId);
+    if (occupant) {
+      const confirmed = window.confirm(`${targetCellKey.replace(":", " x ")} 已有 ${occupant.name}。确认替换后，原 Agent 将变为已训练但未发布。`);
+      if (!confirmed) return;
+    }
+
+    setState((current) => ({
+      ...current,
+      agents: current.agents.map((agent) => {
+        if (agent.id === agentId) {
+          return {
+            ...agent,
+            status: "published",
+            matrixCellKey: targetCellKey,
+            trainedOnce: true,
+            caseUploaded: true,
+            score: Math.max(agent.score, agent.afterReport.score),
+            timeline: [
+              {
+                id: `publish-${Date.now()}`,
+                title: "发布到矩阵节点",
+                description: `已发布至 ${describeCell(targetCellKey)}，接口调用已开放。`,
+                time: nowLabel(),
+              },
+              ...agent.timeline,
+            ],
+          };
+        }
+        if (agent.matrixCellKey === targetCellKey && agent.id !== agentId) {
+          return {
+            ...agent,
+            status: "trained",
+            matrixCellKey: undefined,
+            timeline: [
+              {
+                id: `replace-${Date.now()}`,
+                title: "节点被替换",
+                description: `${targetAgent?.name ?? "新 Agent"} 已成为该节点主 Agent。`,
+                time: nowLabel(),
+              },
+              ...agent.timeline,
+            ],
+          };
+        }
+        return agent;
+      }),
+    }));
+
+    setHighlightedCell(targetCellKey);
+    setSelectedCellKey(null);
+    if (navigateAfterPublish) setView("matrix");
+    notify("Agent 已发布到矩阵节点");
+  };
+
+  const createAgent = (name: string, purpose: string, type: string, inputSchema: string[], outputSchema: string[]) => {
+    const agent = makeNewAgent(name, purpose, type, inputSchema, outputSchema);
+    setState((current) => ({
+      ...current,
+      agents: [agent, ...current.agents],
+      docs: current.docs.map((doc) =>
+        agent.knowledgeIds.includes(doc.id) && !doc.linkedAgents.includes(agent.id)
+          ? { ...doc, linkedAgents: [...doc.linkedAgents, agent.id], updatedAt: "2026-06-21" }
+          : doc,
+      ),
+    }));
+    setSelectedAgentId(agent.id);
+    setCreateOpen(false);
+    setView("detail");
+    notify("Agent 蓝图已生成，已进入训练工作台");
+  };
+
+  const addKnowledgeDoc = () => {
+    const id = `doc-${Date.now()}`;
+    setState((current) => ({
+      ...current,
+      docs: [
+        {
+          id,
+          title: "新增标准文档",
+          category: "业务",
+          tags: ["模拟上传", "待标注"],
+          updatedAt: "2026-06-21",
+          snippet: "这是一份模拟上传的标准文档，可用于展示统一知识库的入库、标签和 Agent 关联流程。",
+          linkedAgents: [],
+        },
+        ...current.docs,
+      ],
+    }));
+    notify("文档已模拟上传到知识库");
+  };
+
+  const updateKnowledgeDoc = (docId: string, patch: Partial<KnowledgeDoc>) => {
+    setState((current) => ({
+      ...current,
+      docs: current.docs.map((doc) => (doc.id === docId ? { ...doc, ...patch, updatedAt: "2026-06-21" } : doc)),
+    }));
+  };
+
+  const deleteKnowledgeDoc = (docId: string) => {
+    setState((current) => ({
+      ...current,
+      docs: current.docs.filter((doc) => doc.id !== docId),
+      agents: current.agents.map((agent) => ({
+        ...agent,
+        knowledgeIds: agent.knowledgeIds.filter((id) => id !== docId),
+      })),
+    }));
+    notify("知识文档已删除并解除 Agent 关联");
+  };
+
+  const toggleDocAgentLink = (docId: string, agentId: string) => {
+    setState((current) => ({
+      ...current,
+      docs: current.docs.map((doc) => {
+        if (doc.id !== docId) return doc;
+        const linked = doc.linkedAgents.includes(agentId);
+        return {
+          ...doc,
+          linkedAgents: linked ? doc.linkedAgents.filter((id) => id !== agentId) : [...doc.linkedAgents, agentId],
+          updatedAt: "2026-06-21",
+        };
+      }),
+      agents: current.agents.map((agent) => {
+        if (agent.id !== agentId) return agent;
+        const linked = agent.knowledgeIds.includes(docId);
+        return {
+          ...agent,
+          knowledgeIds: linked ? agent.knowledgeIds.filter((id) => id !== docId) : [...agent.knowledgeIds, docId],
+        };
+      }),
+    }));
+    notify("知识库关联已更新");
+  };
+
+  const updateRuleEverywhere = (ruleId: string, patch: Partial<Pick<RuleLibraryItem, "title" | "description" | "priority" | "category" | "tags">>) => {
+    const libraryPatch = {
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.description !== undefined ? { description: patch.description } : {}),
+      ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
+    };
+    setState((current) => ({
+      ...current,
+      rules: current.rules.map((rule) =>
+        rule.id === ruleId
+          ? {
+              ...rule,
+              ...patch,
+              updatedAt: "2026-06-21",
+            }
+          : rule,
+      ),
+      agents: current.agents.map((agent) => ({
+        ...agent,
+        rules: agent.rules.map((rule) => (rule.sourceRuleId === ruleId ? { ...rule, ...libraryPatch } : rule)),
+      })),
+    }));
+  };
+
+  const deleteRuleEverywhere = (ruleId: string) => {
+    setState((current) => ({
+      ...current,
+      rules: current.rules.filter((rule) => rule.id !== ruleId),
+      agents: current.agents.map((agent) => ({
+        ...agent,
+        rules: agent.rules.filter((rule) => rule.sourceRuleId !== ruleId),
+      })),
+    }));
+    notify("规则已删除并解除引用");
+  };
+
+  const updateAgentRule = (agentId: string, localRuleId: string, patch: Partial<RuleItem>) => {
+    const targetAgent = agentsById[agentId];
+    const targetRule = targetAgent?.rules.find((rule) => rule.id === localRuleId);
+    const globalPatch = {
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.description !== undefined ? { description: patch.description } : {}),
+      ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
+    };
+    const hasGlobalPatch = Object.keys(globalPatch).length > 0;
+
+    setState((current) => ({
+      ...current,
+      rules:
+        targetRule?.sourceRuleId && hasGlobalPatch
+          ? current.rules.map((rule) => (rule.id === targetRule.sourceRuleId ? { ...rule, ...globalPatch, updatedAt: "2026-06-21" } : rule))
+          : current.rules,
+      agents: current.agents.map((agent) => ({
+        ...agent,
+        rules: agent.rules.map((rule) => {
+          if (targetRule?.sourceRuleId && hasGlobalPatch && rule.sourceRuleId === targetRule.sourceRuleId) {
+            return { ...rule, ...globalPatch };
+          }
+          if (agent.id === agentId && rule.id === localRuleId) {
+            return { ...rule, ...patch };
+          }
+          return rule;
+        }),
+      })),
+    }));
+  };
+
+  const attachRuleToAgent = (agentId: string, ruleId: string) => {
+    const sourceRule = state.rules.find((rule) => rule.id === ruleId);
+    if (!sourceRule) return;
+    updateAgent(agentId, (agent) => {
+      if (agent.rules.some((rule) => rule.sourceRuleId === ruleId)) return agent;
+      return {
+        ...agent,
+        rules: [
+          ...agent.rules,
+          {
+            id: `local-rule-${Date.now()}`,
+            sourceRuleId: sourceRule.id,
+            title: sourceRule.title,
+            description: sourceRule.description,
+            priority: sourceRule.priority,
+            enabled: true,
+          },
+        ],
+      };
+    });
+    notify("规则已关联到当前 Agent");
+  };
+
+  const createRuleForAgent = (agentId?: string) => {
+    const id = `rule-${Date.now()}`;
+    const newRule: RuleLibraryItem = {
+      id,
+      title: "新增业务规则",
+      description: "填写规则适用条件、处理方式和人工复核边界。",
+      priority: "中",
+      category: "业务",
+      tags: ["新增规则", "待完善"],
+      updatedAt: "2026-06-21",
+    };
+    setState((current) => ({
+      ...current,
+      rules: [newRule, ...current.rules],
+      agents: current.agents.map((agent) =>
+        agentId && agent.id === agentId
+          ? {
+              ...agent,
+              rules: [
+                ...agent.rules,
+                {
+                  id: `local-rule-${Date.now()}`,
+                  sourceRuleId: id,
+                  title: newRule.title,
+                  description: newRule.description,
+                  priority: newRule.priority,
+                  enabled: true,
+                },
+              ],
+            }
+          : agent,
+      ),
+    }));
+    notify(agentId ? "规则已新增并关联当前 Agent" : "规则已新增到统一规则库");
+  };
+
+  const detachRuleFromAgent = (agentId: string, localRuleId: string) => {
+    updateAgent(agentId, (agent) => ({
+      ...agent,
+      rules: agent.rules.filter((rule) => rule.id !== localRuleId),
+    }));
+    notify("规则已从当前 Agent 移除");
+  };
+
+  const duplicateAgent = (agentId: string) => {
+    const source = agentsById[agentId];
+    if (!source) return;
+    const clone: Agent = {
+      ...source,
+      id: `agent-copy-${Date.now()}`,
+      name: `${source.name} 副本`,
+      status: "draft",
+      matrixCellKey: undefined,
+      version: "v0.1",
+      score: Math.max(60, source.score - 8),
+      apiCalls: [],
+      timeline: [
+        {
+          id: `copy-${Date.now()}`,
+          title: "复制 Agent",
+          description: `基于 ${source.name} 创建副本，等待训练和发布。`,
+          time: nowLabel(),
+        },
+      ],
+    };
+    setState((current) => ({ ...current, agents: [clone, ...current.agents] }));
+    setSelectedAgentId(clone.id);
+    setView("detail");
+    notify("已复制 Agent 配置");
+  };
+
+  const deleteAgent = (agentId: string) => {
+    const target = agentsById[agentId];
+    if (!target) return;
+    if (target.status === "published") {
+      const confirmed = window.confirm(`确认删除已发布的 ${target.name}？删除后会解除矩阵节点、暂停接口调用，并清理知识库、工具库和评估记录中的关联。`);
+      if (!confirmed) return;
+    }
+
+    setState((current) => {
+      const nextAgents = current.agents.filter((agent) => agent.id !== agentId);
+      return {
+        ...current,
+        agents: nextAgents,
+        docs: current.docs.map((doc) => ({
+          ...doc,
+          linkedAgents: doc.linkedAgents.filter((id) => id !== agentId),
+        })),
+        tools: current.tools.map((tool) => ({
+          ...tool,
+          linkedAgentIds: tool.linkedAgentIds.filter((id) => id !== agentId),
+        })),
+        evalRuns: current.evalRuns.filter((run) => run.agentId !== agentId),
+      };
+    });
+
+    if (selectedAgentId === agentId) {
+      const fallbackAgent = state.agents.find((agent) => agent.id !== agentId);
+      if (fallbackAgent) {
+        setSelectedAgentId(fallbackAgent.id);
+      }
+      setView("agents");
+    }
+    if (trainingAgentId === agentId) {
+      setTrainingAgentId(null);
+      setTrainingRun(null);
+    }
+    if (evaluationAgentId === agentId) {
+      setEvaluationAgentId(null);
+      setEvaluationRun(null);
+    }
+    notify(target.status === "published" ? "已删除 Agent，并清理发布与关联记录" : "Agent 已删除");
+  };
+
+  const unpublishAgent = (agentId: string) => {
+    updateAgent(agentId, (agent) => ({
+      ...agent,
+      status: agent.trainedOnce ? "trained" : "draft",
+      matrixCellKey: undefined,
+      timeline: [
+        {
+          id: `offline-${Date.now()}`,
+          title: "从矩阵下线",
+          description: "该 Agent 已从节点移除，接口调用暂停。",
+          time: nowLabel(),
+        },
+        ...agent.timeline,
+      ],
+    }));
+    notify("Agent 已从矩阵下线");
+  };
+
+  const runEvaluation = (agentId: string) => {
+    const agent = agentsById[agentId];
+    if (!agent) return;
+    if (evaluationAgentId) {
+      notify("已有评估任务运行中，请稍后再试");
+      return;
+    }
+    const result = buildEvaluationRunResult(agent);
+    setEvaluationAgentId(agentId);
+    setEvaluationStep(0);
+    setEvaluationRun({
+      agentId,
+      startedAt: nowLabel(),
+      completed: false,
+      result,
+    });
+
+    evaluationStageCatalog.forEach((_, index) => {
+      window.setTimeout(() => {
+        setEvaluationStep(index);
+        if (index === evaluationStageCatalog.length - 1) {
+          window.setTimeout(() => {
+            setState((current) => ({
+              ...current,
+              agents: current.agents.map((item) =>
+                item.id === agentId
+                  ? {
+                      ...item,
+                      timeline: [
+                        {
+                          id: `eval-timeline-${result.runId}`,
+                          title: `评估反馈报告 ${result.version}`,
+                          description: `完成 ${evaluationStageCatalog.length} 个评估阶段，质量分 ${result.score}，通过率 ${result.passRate}%，门槛状态：${result.gate}。`,
+                          time: nowLabel(),
+                          version: result.version,
+                          metrics: [
+                            { label: "质量分", value: String(result.score), tone: result.score >= 88 ? "green" : "amber" },
+                            { label: "通过率", value: `${result.passRate}%`, tone: result.passRate >= 90 ? "green" : "amber" },
+                            { label: "失败用例", value: String(result.failed), tone: result.failed ? "amber" : "green" },
+                            { label: "结构评分", value: String(result.structureScore), tone: result.structureScore >= 88 ? "green" : "amber" },
+                            { label: "证据评分", value: String(result.evidenceScore), tone: result.evidenceScore >= 88 ? "green" : "amber" },
+                            { label: "门槛", value: result.gate, tone: result.gate === "通过" ? "green" : "amber" },
+                          ],
+                          steps: result.stages,
+                          changes: [...result.findings, ...result.recommendations.map((item) => `评估建议：${item}`)],
+                        },
+                        ...item.timeline,
+                      ],
+                    }
+                  : item,
+              ),
+              evalRuns: [
+                {
+                  id: result.runId,
+                  agentId,
+                  suite: `${agent.type} 回归评估`,
+                  score: result.score,
+                  passRate: result.passRate,
+                  cases: result.cases,
+                  failed: result.failed,
+                  time: nowLabel(),
+                  notes: result.notes,
+                },
+                ...current.evalRuns,
+              ],
+            }));
+            setEvaluationRun((current) => (current?.agentId === agentId ? { ...current, completed: true, result } : current));
+            setEvaluationAgentId(null);
+            notify("评估反馈报告已生成");
+          }, 480);
+        }
+      }, index * 620);
+    });
+  };
+
+  const invokeAgent = (agentId: string, source: string, payload: string) => {
+    const agent = agentsById[agentId];
+    if (!agent) return;
+    const invokedAt = nowLabel();
+    const result = `200 / 已返回 ${payload.length > 24 ? payload.slice(0, 24) : payload || "模拟请求"} 的结构化结果`;
+    setState((current) => ({
+      ...current,
+      agents: current.agents.map((item) =>
+        item.id === agentId
+          ? {
+              ...item,
+              apiCalls: [
+                {
+                  id: `call-${Date.now()}`,
+                  source,
+                  result,
+                  time: invokedAt,
+                },
+                ...item.apiCalls,
+              ],
+            }
+          : item,
+      ),
+      apiKeys: current.apiKeys.map((key) => (key.name === source ? { ...key, status: "启用", lastUsed: invokedAt } : key)),
+    }));
+    notify("模拟请求已发送");
+  };
+
+  const toggleTool = (toolId: string) => {
+    setState((current) => ({
+      ...current,
+      tools: current.tools.map((tool) => (tool.id === toolId ? { ...tool, status: tool.status === "启用" ? "停用" : "启用" } : tool)),
+    }));
+    notify("工具状态已更新");
+  };
+
+  const createTool = () => {
+    setState((current) => ({
+      ...current,
+      tools: [
+        {
+          id: `tool-${Date.now()}`,
+          name: "新增工具",
+          category: "生成",
+          description: "填写工具用途、输入输出和适用 Agent。",
+          status: "启用",
+          linkedAgentIds: [],
+          endpoint: "/tools/new-tool",
+        },
+        ...current.tools,
+      ],
+    }));
+    notify("工具已新增");
+  };
+
+  const updateTool = (toolId: string, patch: Partial<ToolAsset>) => {
+    setState((current) => ({
+      ...current,
+      tools: current.tools.map((tool) => (tool.id === toolId ? { ...tool, ...patch } : tool)),
+    }));
+  };
+
+  const deleteTool = (toolId: string) => {
+    setState((current) => ({
+      ...current,
+      tools: current.tools.filter((tool) => tool.id !== toolId),
+    }));
+    notify("工具已删除");
+  };
+
+  const toggleApiKey = (keyId: string) => {
+    setState((current) => ({
+      ...current,
+      apiKeys: current.apiKeys.map((key) => (key.id === keyId ? { ...key, status: key.status === "启用" ? "停用" : "启用" } : key)),
+    }));
+    notify("API Key 状态已更新");
+  };
+
+  const createApiKey = () => {
+    setState((current) => ({
+      ...current,
+      apiKeys: [
+        {
+          id: `key-${Date.now()}`,
+          name: "新增调用方",
+          scope: "agent:invoke",
+          status: "启用",
+          lastUsed: "尚未使用",
+        },
+        ...current.apiKeys,
+      ],
+    }));
+    notify("API Key 已新增");
+  };
+
+  const deleteApiKey = (keyId: string) => {
+    setState((current) => ({
+      ...current,
+      apiKeys: current.apiKeys.filter((key) => key.id !== keyId),
+    }));
+    notify("API Key 已删除");
+  };
+
+  const updateApiKey = (keyId: string, patch: Partial<ApiKeyRecord>) => {
+    setState((current) => ({
+      ...current,
+      apiKeys: current.apiKeys.map((key) => (key.id === keyId ? { ...key, ...patch } : key)),
+    }));
+  };
+
+  const resetDemo = () => {
+    const confirmed = window.confirm("确认重置演示数据？训练、发布和反馈状态会恢复到初始版本。");
+    if (!confirmed) return;
+    setState(defaultState);
+    setSelectedAgentId("contract-review");
+    setSelectedCellKey(null);
+    setHighlightedCell(null);
+    setView("matrix");
+    notify("演示数据已重置");
+  };
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">MC</div>
+          <div>
+            <div className="brand-title">滴灌通Agent平台</div>
+            <div className="brand-subtitle">Work / Functional Flow</div>
+          </div>
+        </div>
+
+        <nav className="nav-stack" aria-label="主导航">
+          <NavButton icon={<Grid3X3 />} label="矩阵看板" active={view === "matrix"} onClick={() => setView("matrix")} />
+          <NavButton icon={<Bot />} label="Agent 管理" active={view === "agents" || view === "detail"} onClick={() => setView("agents")} />
+          <NavButton icon={<Database />} label="知识库" active={view === "knowledge"} onClick={() => setView("knowledge")} />
+          <NavButton icon={<Settings2 />} label="规则库" active={view === "rules"} onClick={() => setView("rules")} />
+          <NavButton icon={<Wrench />} label="工具库" active={view === "tools"} onClick={() => setView("tools")} />
+          <NavButton icon={<CheckCircle2 />} label="评估追踪" active={view === "evaluation"} onClick={() => setView("evaluation")} />
+          <NavButton icon={<Code2 />} label="接口中心" active={view === "api"} onClick={() => setView("api")} />
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className="demo-badge">演示数据</div>
+          <button className="ghost-button reset-button" onClick={resetDemo} type="button">
+            <RefreshCw size={15} />
+            重置
+          </button>
+        </div>
+      </aside>
+
+      <main className="main">
+        {view === "matrix" && (
+          <MatrixPage
+            agents={state.agents}
+            tools={state.tools}
+            apiKeys={state.apiKeys}
+            highlightedCell={highlightedCell}
+            selectedCellKey={selectedCellKey}
+            onOpenCell={openCell}
+            onCloseCell={() => setSelectedCellKey(null)}
+            onOpenAgent={openAgent}
+            onPlaceAgent={placeAgent}
+          />
+        )}
+
+        {view === "agents" && (
+          <AgentsPage
+            agents={state.agents}
+            onOpenAgent={openAgent}
+            onDuplicateAgent={duplicateAgent}
+            onDeleteAgent={deleteAgent}
+            onUnpublishAgent={unpublishAgent}
+            createOpen={createOpen}
+            onOpenCreate={() => setCreateOpen(true)}
+            onCloseCreate={() => setCreateOpen(false)}
+            onCreateAgent={createAgent}
+          />
+        )}
+
+        {view === "knowledge" && (
+          <KnowledgePage
+            docs={state.docs}
+            agents={state.agents}
+            onOpenAgent={openAgent}
+            onAddDoc={addKnowledgeDoc}
+            onUpdateDoc={updateKnowledgeDoc}
+            onDeleteDoc={deleteKnowledgeDoc}
+            onToggleDocAgent={toggleDocAgentLink}
+          />
+        )}
+
+        {view === "rules" && (
+          <RulesPage
+            rules={state.rules}
+            agents={state.agents}
+            onUpdateRule={updateRuleEverywhere}
+            onCreateRule={() => createRuleForAgent()}
+            onDeleteRule={deleteRuleEverywhere}
+            onOpenAgent={openAgent}
+          />
+        )}
+
+        {view === "tools" && (
+          <ToolsPage
+            tools={state.tools}
+            agents={state.agents}
+            onToggleTool={toggleTool}
+            onCreateTool={createTool}
+            onUpdateTool={updateTool}
+            onDeleteTool={deleteTool}
+            onOpenAgent={openAgent}
+          />
+        )}
+
+        {view === "evaluation" && (
+          <EvaluationPage agents={state.agents} evalRuns={state.evalRuns} onRunEvaluation={runEvaluation} onOpenAgent={openAgent} />
+        )}
+
+        {view === "api" && (
+          <ApiCenterPage
+            agents={state.agents}
+            apiKeys={state.apiKeys}
+            onInvokeAgent={invokeAgent}
+            onToggleApiKey={toggleApiKey}
+            onCreateApiKey={createApiKey}
+            onUpdateApiKey={updateApiKey}
+            onDeleteApiKey={deleteApiKey}
+            onOpenAgent={openAgent}
+          />
+        )}
+
+        {view === "detail" && selectedAgent && (
+          <AgentDetailPage
+            agent={selectedAgent}
+            docs={state.docs}
+            agents={state.agents}
+            trainingAgentId={trainingAgentId}
+            trainingStep={trainingStep}
+            onBack={() => setView("agents")}
+            onUpdateAgent={updateAgent}
+            onTrain={startTraining}
+            onFeedback={submitFeedback}
+            onPublish={placeAgent}
+            onOpenKnowledge={() => setView("knowledge")}
+            onToggleKnowledgeLink={toggleDocAgentLink}
+            onUnpublishAgent={unpublishAgent}
+            onRunEvaluation={runEvaluation}
+            onNotify={notify}
+            ruleLibrary={state.rules}
+            onAttachRule={attachRuleToAgent}
+            onCreateRule={createRuleForAgent}
+            onUpdateAgentRule={updateAgentRule}
+            onDetachRule={detachRuleFromAgent}
+          />
+        )}
+      </main>
+      {notice && <div className="toast">{notice}</div>}
+      {trainingRun && trainingRunAgent && (
+        <TrainingRunModal
+          agent={trainingRunAgent}
+          run={trainingRun}
+          trainingStep={trainingStep}
+          onClose={() => setTrainingRun(null)}
+        />
+      )}
+      {evaluationRun && evaluationRunAgent && (
+        <EvaluationRunModal
+          agent={evaluationRunAgent}
+          run={evaluationRun}
+          evaluationStep={evaluationStep}
+          onClose={() => setEvaluationRun(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function TrainingRunModal({
+  agent,
+  run,
+  trainingStep,
+  onClose,
+}: {
+  agent: Agent;
+  run: TrainingRunState;
+  trainingStep: number;
+  onClose: () => void;
+}) {
+  const activeIndex = run.completed ? trainingSteps.length - 1 : Math.min(trainingStep, trainingSteps.length - 1);
+  const progress = run.completed ? 100 : Math.round(((activeIndex + 1) / trainingSteps.length) * 100);
+  const activeStep = run.result.steps[activeIndex] ?? run.result.steps[0];
+  const visibleSteps = run.completed ? run.result.steps : run.result.steps.slice(0, activeIndex + 1);
+  const deltaLabel = `${run.result.delta >= 0 ? "+" : ""}${run.result.delta}`;
+
+  return (
+    <div className="training-modal-backdrop" role="dialog" aria-modal="true" aria-label="训练运行中心">
+      <div className="training-modal">
+        <div className="training-modal-hero">
+          <div>
+            <div className="eyebrow">Agent Training Run Center</div>
+            <h2>{run.completed ? "训练完成，版本报告已生成" : "训练运行中"}</h2>
+            <p>
+              {agent.name} 正在执行样例回归、知识检索校准、规则边界验证、工具链 Dry-run 和版本报告生成。
+            </p>
+          </div>
+          <div className="training-modal-status">
+            <span>{run.completed ? "Completed" : "Live"}</span>
+            <strong>{progress}%</strong>
+            {run.completed ? (
+              <button className="icon-button" type="button" onClick={onClose} aria-label="关闭训练报告">
+                <X size={17} />
+              </button>
+            ) : (
+              <small>训练结束后可关闭</small>
+            )}
+          </div>
+        </div>
+
+        <div className="training-modal-progress">
+          <div className="training-modal-progress-bar">
+            <span style={{ width: `${progress}%` }} />
+          </div>
+          <div className="training-modal-steps">
+            {trainingStepCatalog.map((step, index) => {
+              const state = run.completed || index < activeIndex ? "done" : index === activeIndex ? "active" : "pending";
+              return (
+                <div className={`training-modal-step ${state}`} key={step.title}>
+                  <span>{index + 1}</span>
+                  <strong>{step.title}</strong>
+                  <small>{step.system}</small>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="training-modal-grid">
+          <section className="training-live-panel">
+            <div className="run-config-head">
+              <div>
+                <div className="eyebrow">Current Stage</div>
+                <h3>{activeStep.title}</h3>
+              </div>
+              <span>{activeStep.metric}</span>
+            </div>
+            <p>{activeStep.detail}</p>
+            <div className="training-terminal">
+              {visibleSteps.map((step, index) => (
+                <div key={step.title}>
+                  <span>{String(index + 1).padStart(2, "0")}</span>
+                  <strong>{step.title}</strong>
+                  <em>{step.status}</em>
+                  <p>{step.detail}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="training-result-panel">
+            <div className="modal-score-ring">
+              <strong>{run.result.scoreAfter}</strong>
+              <span>质量分</span>
+            </div>
+            <div className="modal-metric-grid">
+              <div>
+                <span>版本</span>
+                <strong>{`${run.result.versionBefore} -> ${run.result.versionAfter}`}</strong>
+              </div>
+              <div>
+                <span>提升点</span>
+                <strong>{deltaLabel}</strong>
+              </div>
+              <div>
+                <span>通过率</span>
+                <strong>{run.result.passRate}%</strong>
+              </div>
+              <div>
+                <span>置信度</span>
+                <strong>{run.result.confidence}%</strong>
+              </div>
+              <div>
+                <span>规则验证</span>
+                <strong>{run.result.rulesVerified} 条</strong>
+              </div>
+              <div>
+                <span>工具调用</span>
+                <strong>{run.result.toolsVerified} 个</strong>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div className="training-report-grid">
+          <section>
+            <div className="section-title small">
+              <Sparkles size={16} />
+              本轮改动点
+            </div>
+            <ul className="modal-change-list">
+              {run.result.changes.map((change) => (
+                <li key={change}>{change}</li>
+              ))}
+            </ul>
+          </section>
+          <section>
+            <div className="section-title small">
+              <ShieldCheck size={16} />
+              下一轮建议
+            </div>
+            <ul className="modal-change-list">
+              {run.result.recommendations.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </section>
+        </div>
+
+        <div className={`training-modal-footer ${run.completed ? "complete" : ""}`}>
+          <span>{run.completed ? "训练报告、评估记录和详细步骤已写入版本时间线。" : `开始时间 ${run.startedAt}，正在采集训练指标。`}</span>
+          {run.completed && (
+            <button className="primary-button" type="button" onClick={onClose}>
+              查看版本时间线
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EvaluationRunModal({
+  agent,
+  run,
+  evaluationStep,
+  onClose,
+}: {
+  agent: Agent;
+  run: EvaluationRunState;
+  evaluationStep: number;
+  onClose: () => void;
+}) {
+  const activeIndex = run.completed ? evaluationStageCatalog.length - 1 : Math.min(evaluationStep, evaluationStageCatalog.length - 1);
+  const progress = run.completed ? 100 : Math.round(((activeIndex + 1) / evaluationStageCatalog.length) * 100);
+  const activeStage = run.result.stages[activeIndex] ?? run.result.stages[0];
+  const visibleStages = run.completed ? run.result.stages : run.result.stages.slice(0, activeIndex + 1);
+
+  return (
+    <div className="training-modal-backdrop" role="dialog" aria-modal="true" aria-label="评估反馈中心">
+      <div className="training-modal evaluation-modal">
+        <div className="training-modal-hero">
+          <div>
+            <div className="eyebrow">Evaluation Feedback Center</div>
+            <h2>{run.completed ? "评估完成，反馈报告已生成" : "评估运行中"}</h2>
+            <p>
+              {agent.name} 正在执行用例集装载、结构化输出校验、知识规则证据审计、回归评分和评估反馈生成。
+            </p>
+          </div>
+          <div className="training-modal-status">
+            <span>{run.completed ? run.result.gate : "Live"}</span>
+            <strong>{progress}%</strong>
+            {run.completed ? (
+              <button className="icon-button" type="button" onClick={onClose} aria-label="关闭评估反馈">
+                <X size={17} />
+              </button>
+            ) : (
+              <small>评估结束后可关闭</small>
+            )}
+          </div>
+        </div>
+
+        <div className="training-modal-progress">
+          <div className="training-modal-progress-bar">
+            <span style={{ width: `${progress}%` }} />
+          </div>
+          <div className="training-modal-steps eval-steps">
+            {evaluationStageCatalog.map((stage, index) => {
+              const state = run.completed || index < activeIndex ? "done" : index === activeIndex ? "active" : "pending";
+              return (
+                <div className={`training-modal-step ${state}`} key={stage.title}>
+                  <span>{index + 1}</span>
+                  <strong>{stage.title}</strong>
+                  <small>{stage.system}</small>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="training-modal-grid">
+          <section className="training-live-panel">
+            <div className="run-config-head">
+              <div>
+                <div className="eyebrow">Current Check</div>
+                <h3>{activeStage.title}</h3>
+              </div>
+              <span>{activeStage.metric}</span>
+            </div>
+            <p>{activeStage.detail}</p>
+            <div className="training-terminal">
+              {visibleStages.map((stage, index) => (
+                <div key={stage.title}>
+                  <span>{String(index + 1).padStart(2, "0")}</span>
+                  <strong>{stage.title}</strong>
+                  <em>{stage.status}</em>
+                  <p>{stage.detail}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="training-result-panel">
+            <div className="modal-score-ring">
+              <strong>{run.result.score}</strong>
+              <span>评估分</span>
+            </div>
+            <div className="modal-metric-grid">
+              <div>
+                <span>门槛状态</span>
+                <strong>{run.result.gate}</strong>
+              </div>
+              <div>
+                <span>通过率</span>
+                <strong>{run.result.passRate}%</strong>
+              </div>
+              <div>
+                <span>失败用例</span>
+                <strong>{run.result.failed}</strong>
+              </div>
+              <div>
+                <span>结构评分</span>
+                <strong>{run.result.structureScore}</strong>
+              </div>
+              <div>
+                <span>证据评分</span>
+                <strong>{run.result.evidenceScore}</strong>
+              </div>
+              <div>
+                <span>稳定性</span>
+                <strong>{run.result.stabilityScore}</strong>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div className="training-report-grid">
+          <section>
+            <div className="section-title small">
+              <Activity size={16} />
+              评估发现
+            </div>
+            <ul className="modal-change-list">
+              {run.result.findings.map((finding) => (
+                <li key={finding}>{finding}</li>
+              ))}
+            </ul>
+          </section>
+          <section>
+            <div className="section-title small">
+              <ShieldCheck size={16} />
+              优化建议
+            </div>
+            <ul className="modal-change-list">
+              {run.result.recommendations.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </section>
+        </div>
+
+        <div className={`training-modal-footer ${run.completed ? "complete" : ""}`}>
+          <span>{run.completed ? "评估记录、发现与优化建议已写入版本时间线。" : `开始时间 ${run.startedAt}，正在采集评估反馈。`}</span>
+          {run.completed && (
+            <button className="primary-button" type="button" onClick={onClose}>
+              查看评估记录
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NavButton({
+  icon,
+  label,
+  active,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button className={`nav-button ${active ? "active" : ""}`} onClick={onClick} type="button">
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function describeCell(key: string) {
+  const [workId, funcId] = key.split(":");
+  const work = workFlows.find((item) => item.id === workId)?.label ?? workId;
+  const func = functionalFlows.find((item) => item.id === funcId)?.label ?? funcId;
+  return `${work} x ${func}`;
+}
+
+function getCellState(agent?: Agent) {
+  if (!agent) return { label: "待规划", className: "planned" };
+  if (agent.status === "published") return { label: "已发布", className: "published" };
+  return { label: "待训练", className: "training" };
+}
+
+function MatrixPage({
+  agents,
+  tools,
+  apiKeys,
+  highlightedCell,
+  selectedCellKey,
+  onOpenCell,
+  onCloseCell,
+  onOpenAgent,
+  onPlaceAgent,
+}: {
+  agents: Agent[];
+  tools: ToolAsset[];
+  apiKeys: ApiKeyRecord[];
+  highlightedCell: string | null;
+  selectedCellKey: string | null;
+  onOpenCell: (key: string) => void;
+  onCloseCell: () => void;
+  onOpenAgent: (agentId: string) => void;
+  onPlaceAgent: (agentId: string, targetCellKey: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "published" | "training" | "planned">("all");
+  const [workFilter, setWorkFilter] = useState("all");
+  const [heatmap, setHeatmap] = useState(false);
+
+  const agentByCell = useMemo(() => {
+    const entries = agents.filter((agent) => agent.matrixCellKey).map((agent) => [agent.matrixCellKey!, agent]);
+    return Object.fromEntries(entries) as Record<string, Agent>;
+  }, [agents]);
+
+  const counts = useMemo(() => {
+    const placed = agents.filter((agent) => agent.matrixCellKey);
+    const published = agents.filter((agent) => agent.status === "published");
+    const avgScore = Math.round(agents.reduce((sum, agent) => sum + agent.score, 0) / Math.max(agents.length, 1));
+    return {
+      total: 80,
+      agentTotal: agents.length,
+      placed: placed.length,
+      published: placed.filter((agent) => agent.status === "published").length,
+      publishedAgents: published.length,
+      training: placed.filter((agent) => agent.status !== "published").length,
+      planned: 80 - placed.length,
+      avgScore,
+      enabledTools: tools.filter((tool) => tool.status === "启用").length,
+      activeApiKeys: apiKeys.filter((key) => key.status === "启用").length,
+    };
+  }, [agents, apiKeys, tools]);
+
+  const selectedAgent = selectedCellKey ? agentByCell[selectedCellKey] : undefined;
+
+  const visibleWorkFlows = workFlows.filter((work) => workFilter === "all" || work.id === workFilter);
+  const matchesCell = (key: string, agent?: Agent) => {
+    const state = getCellState(agent).className;
+    const hitStatus = statusFilter === "all" || statusFilter === state;
+    const text = `${describeCell(key)} ${agent?.name ?? "待规划"} ${agent?.type ?? ""}`.toLowerCase();
+    const hitQuery = text.includes(query.toLowerCase());
+    return hitStatus && hitQuery;
+  };
+
+  return (
+    <section className="page page-matrix">
+      <div className="page-sticky-zone">
+        <PageHeader
+          eyebrow="Work Flow x Functional Flow"
+          title="矩阵看板"
+        />
+
+        <div className="metric-row wide-metrics">
+          <Metric icon={<Bot />} label="Agent 总数" value={counts.agentTotal.toString()} />
+          <Metric icon={<Grid3X3 />} label="已落位节点" value={`${counts.placed}/${counts.total}`} />
+          <Metric icon={<Rocket />} label="已发布 Agent" value={counts.publishedAgents.toString()} tone="green" />
+          <Metric icon={<Star />} label="平均质量分" value={counts.avgScore.toString()} tone={counts.avgScore >= 86 ? "green" : "amber"} />
+          <Metric icon={<Wrench />} label="启用工具" value={counts.enabledTools.toString()} />
+          <Metric icon={<Code2 />} label="接口密钥" value={counts.activeApiKeys.toString()} />
+        </div>
+
+        <div className="matrix-control-bar">
+          <label className="search-box">
+            <Search size={16} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索节点、Agent、类型" />
+          </label>
+          <label className="select-box">
+            <Filter size={16} />
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "all" | "published" | "training" | "planned")}>
+              <option value="all">全部节点</option>
+              <option value="published">已发布</option>
+              <option value="training">待训练</option>
+              <option value="planned">待规划</option>
+            </select>
+          </label>
+          <label className="select-box">
+            <Route size={16} />
+            <select value={workFilter} onChange={(event) => setWorkFilter(event.target.value)}>
+              <option value="all">全部 Work Flow</option>
+              {workFlows.map((work) => (
+                <option key={work.id} value={work.id}>
+                  {work.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className={`secondary-button ${heatmap ? "active-toggle" : ""}`} type="button" onClick={() => setHeatmap((value) => !value)}>
+            <Activity size={16} />
+            热力视图
+          </button>
+        </div>
+      </div>
+
+      <div className="matrix-wrap">
+        <div className={`matrix-table ${heatmap ? "heatmap" : ""}`} role="grid" aria-label="Work Flow x Functional Flow 矩阵">
+          <div className="matrix-corner">
+            <span className="corner-functional">Functional Flow</span>
+            <span className="corner-work">Work Flow</span>
+          </div>
+          {functionalFlows.map((flow) => (
+            <div className="matrix-header" key={flow.id}>
+              {flow.label}
+            </div>
+          ))}
+          {visibleWorkFlows.map((work) => (
+            <div className="matrix-row" key={work.id}>
+              <div className="matrix-side">{work.label}</div>
+              {functionalFlows.map((func) => {
+                const key = cellKey(work.id, func.id);
+                const agent = agentByCell[key];
+                const state = getCellState(agent);
+                const visible = matchesCell(key, agent);
+                return (
+                  <button
+                    className={`matrix-cell ${state.className} ${highlightedCell === key ? "highlight" : ""} ${visible ? "" : "dimmed"}`}
+                    key={key}
+                    type="button"
+                    onClick={() => onOpenCell(key)}
+                    aria-label={`${work.label} ${func.label} ${agent?.name ?? "待规划"}`}
+                  >
+                    <span className={`status-dot ${state.className}`} />
+                    <span className="cell-status">{state.label}</span>
+                    <span className="cell-agent">{agent?.name ?? "待规划"}</span>
+                    {agent && <span className="cell-score">{agent.version} / {agent.score}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {selectedCellKey && (
+        <NodePanel
+          cellKeyValue={selectedCellKey}
+          agent={selectedAgent}
+          agents={agents}
+          onClose={onCloseCell}
+          onOpenAgent={onOpenAgent}
+          onPlaceAgent={onPlaceAgent}
+        />
+      )}
+    </section>
+  );
+}
+
+function NodePanel({
+  cellKeyValue,
+  agent,
+  agents,
+  onClose,
+  onOpenAgent,
+  onPlaceAgent,
+}: {
+  cellKeyValue: string;
+  agent?: Agent;
+  agents: Agent[];
+  onClose: () => void;
+  onOpenAgent: (agentId: string) => void;
+  onPlaceAgent: (agentId: string, targetCellKey: string) => void;
+}) {
+  const [selectedId, setSelectedId] = useState(agent?.id ?? agents[0]?.id ?? "");
+
+  useEffect(() => {
+    setSelectedId(agent?.id ?? agents[0]?.id ?? "");
+  }, [agent?.id, agents]);
+
+  const cellState = getCellState(agent);
+
+  return (
+    <aside className="node-panel" aria-label="节点详情">
+      <div className="panel-header">
+        <div>
+          <div className="eyebrow">节点详情</div>
+          <h2>{describeCell(cellKeyValue)}</h2>
+        </div>
+        <button className="icon-button" onClick={onClose} type="button" aria-label="关闭">
+          <X size={18} />
+        </button>
+      </div>
+
+      {agent ? (
+        <div className="agent-summary-block">
+          <span className={`pill ${cellState.className}`}>{cellState.label}</span>
+          <h3>{agent.name}</h3>
+          <p>{agent.purpose}</p>
+          <div className="mini-grid">
+            <span>类型</span>
+            <strong>{agent.type}</strong>
+            <span>版本</span>
+            <strong>{agent.version}</strong>
+            <span>评分</span>
+            <strong>{agent.score}</strong>
+          </div>
+          <button className="secondary-button" type="button" onClick={() => onOpenAgent(agent.id)}>
+            <ArrowRight size={16} />
+            进入 Agent 管理
+          </button>
+        </div>
+      ) : (
+        <div className="agent-summary-block muted">
+          <span className="pill planned">{emptyState.title}</span>
+          <h3>{emptyState.title}</h3>
+          <p>{emptyState.text}</p>
+        </div>
+      )}
+
+      <div className="placement-box">
+        <div className="section-title">
+          <Route size={16} />
+          轻量放置 / 替换
+        </div>
+        <label className="field-label" htmlFor="placement-agent">
+          选择 Agent
+        </label>
+        <select id="placement-agent" value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
+          {agents.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name} / {statusCopy[item.status]}
+            </option>
+          ))}
+        </select>
+        <button className="primary-button full" type="button" onClick={() => onPlaceAgent(selectedId, cellKeyValue)}>
+          <Save size={16} />
+          放置到该节点
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function AgentsPage({
+  agents,
+  onOpenAgent,
+  onDuplicateAgent,
+  onDeleteAgent,
+  onUnpublishAgent,
+  createOpen,
+  onOpenCreate,
+  onCloseCreate,
+  onCreateAgent,
+}: {
+  agents: Agent[];
+  onOpenAgent: (agentId: string) => void;
+  onDuplicateAgent: (agentId: string) => void;
+  onDeleteAgent: (agentId: string) => void;
+  onUnpublishAgent: (agentId: string) => void;
+  createOpen: boolean;
+  onOpenCreate: () => void;
+  onCloseCreate: () => void;
+  onCreateAgent: (name: string, purpose: string, type: string, inputSchema: string[], outputSchema: string[]) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<"all" | AgentStatus>("all");
+  const [type, setType] = useState("all");
+
+  const types = useMemo(() => Array.from(new Set(agents.map((agent) => agent.type))), [agents]);
+  const filtered = agents.filter((agent) => {
+    const hitQuery = `${agent.name}${agent.type}${agent.purpose}`.toLowerCase().includes(query.toLowerCase());
+    const hitStatus = status === "all" || agent.status === status;
+    const hitType = type === "all" || agent.type === type;
+    return hitQuery && hitStatus && hitType;
+  });
+
+  return (
+    <section className="page">
+      <div className="page-sticky-zone">
+        <PageHeader
+          eyebrow="Agent Management"
+          title="Agent 管理"
+          description="统一管理 Agent 的定义、训练、测试、发布和接口开放状态。"
+          actions={
+            <button className="primary-button" type="button" onClick={onOpenCreate}>
+              <Plus size={16} />
+              新建 Agent
+            </button>
+          }
+        />
+
+        <div className="filter-bar">
+          <label className="search-box">
+            <Search size={16} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Agent、类型或用途" />
+          </label>
+          <label className="select-box">
+            <Filter size={16} />
+            <select value={status} onChange={(event) => setStatus(event.target.value as "all" | AgentStatus)}>
+              <option value="all">全部状态</option>
+              <option value="draft">待训练</option>
+              <option value="trained">已训练</option>
+              <option value="published">已发布</option>
+            </select>
+          </label>
+          <label className="select-box">
+            <Bot size={16} />
+            <select value={type} onChange={(event) => setType(event.target.value)}>
+              <option value="all">全部类型</option>
+              {types.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      {createOpen && <CreateAgentPanel onClose={onCloseCreate} onCreate={onCreateAgent} />}
+
+      <div className="agent-table">
+        <div className="table-head">
+          <span>Agent</span>
+          <span>类型</span>
+          <span>状态</span>
+          <span>矩阵节点</span>
+          <span>评分</span>
+          <span>操作</span>
+        </div>
+        {filtered.map((agent) => (
+          <div className="table-row" key={agent.id}>
+            <div>
+              <strong>{agent.name}</strong>
+              <p>{agent.purpose}</p>
+            </div>
+            <span>{agent.type}</span>
+            <span className={`pill ${agent.status === "published" ? "published" : agent.status === "trained" ? "training" : "planned"}`}>
+              {statusCopy[agent.status]}
+            </span>
+            <span className="muted-text">{agent.matrixCellKey ? describeCell(agent.matrixCellKey) : "未放置"}</span>
+            <span>{agent.score}</span>
+            <div className="row-actions">
+              <button className="icon-button agent-action-button" type="button" onClick={() => onOpenAgent(agent.id)} aria-label={`管理 ${agent.name}`} title="管理">
+                <Settings2 size={15} />
+              </button>
+              <button className="icon-button agent-action-button" type="button" onClick={() => onDuplicateAgent(agent.id)} aria-label={`复制 ${agent.name}`} title="复制">
+                <Copy size={15} />
+              </button>
+              <button
+                className="icon-button agent-action-button"
+                type="button"
+                onClick={() => onUnpublishAgent(agent.id)}
+                disabled={agent.status !== "published"}
+                aria-label={agent.status === "published" ? `下线 ${agent.name}` : `${agent.name} 尚未发布，无法下线`}
+                title={agent.status === "published" ? "下线" : "未发布，无法下线"}
+              >
+                <PowerOff size={15} />
+              </button>
+              <button
+                className="icon-button agent-action-button danger-button"
+                type="button"
+                onClick={() => onDeleteAgent(agent.id)}
+                aria-label={`删除 ${agent.name}`}
+                title="删除"
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CreateAgentPanel({
+  onClose,
+  onCreate,
+}: {
+  onClose: () => void;
+  onCreate: (name: string, purpose: string, type: string, inputSchema: string[], outputSchema: string[]) => void;
+}) {
+  const [name, setName] = useState("合同审查 Agent");
+  const [type, setType] = useState("合同审查");
+  const [purpose, setPurpose] = useState("审查门店现金流合约中的收益分配、披露义务、提前终止、数据授权和争议处理条款。");
+  const suggestedBlueprint = inferAgentBlueprint(name, type, purpose);
+  const [schemaEdited, setSchemaEdited] = useState(false);
+  const [inputSchemaText, setInputSchemaText] = useState(() => schemaToText(suggestedBlueprint.inputSchema));
+  const [outputSchemaText, setOutputSchemaText] = useState(() => schemaToText(suggestedBlueprint.outputSchema));
+
+  useEffect(() => {
+    if (schemaEdited) return;
+    setInputSchemaText(schemaToText(suggestedBlueprint.inputSchema));
+    setOutputSchemaText(schemaToText(suggestedBlueprint.outputSchema));
+  }, [schemaEdited, suggestedBlueprint]);
+
+  const inputSchema = parseSchemaText(inputSchemaText, suggestedBlueprint.inputSchema);
+  const outputSchema = parseSchemaText(outputSchemaText, suggestedBlueprint.outputSchema);
+
+  return (
+    <div className="create-panel studio-create-panel">
+      <div className="panel-header inline">
+        <div>
+          <div className="eyebrow">Agent Studio</div>
+          <h2>创建业务 Agent 蓝图</h2>
+          <p>填写 Agent 要解决的业务问题，系统会生成初始 Prompt、工具链、知识关联、规则和评测集，后续都可继续调整。</p>
+        </div>
+        <button className="icon-button" onClick={onClose} type="button" aria-label="关闭">
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="create-stepper">
+        {["定义职责", "确认输入输出", "装配能力", "生成工作台"].map((step, index) => (
+          <div className="create-step active" key={step}>
+            <span>{index + 1}</span>
+            {step}
+          </div>
+        ))}
+      </div>
+
+      <div className="studio-create-grid direct-create-grid">
+        <div className="blueprint-editor">
+          <div className="section-title">
+            <Bot size={16} />
+            Agent 定义
+          </div>
+          <div className="form-grid">
+            <label>
+              <span>Agent 名称</span>
+              <input value={name} onChange={(event) => setName(event.target.value)} />
+            </label>
+            <label>
+              <span>能力类型</span>
+              <input value={type} onChange={(event) => setType(event.target.value)} />
+            </label>
+            <label className="wide">
+              <span>业务职责</span>
+              <textarea value={purpose} onChange={(event) => setPurpose(event.target.value)} rows={3} />
+            </label>
+          </div>
+
+          <div className="schema-preview-grid">
+            <label className="schema-card editable-schema-card">
+              <div className="section-title small">
+                <Upload size={15} />
+                输入契约
+              </div>
+              <textarea
+                value={inputSchemaText}
+                onChange={(event) => {
+                  setSchemaEdited(true);
+                  setInputSchemaText(event.target.value);
+                }}
+                rows={5}
+              />
+            </label>
+            <label className="schema-card editable-schema-card">
+              <div className="section-title small">
+                <FileText size={15} />
+                输出契约
+              </div>
+              <textarea
+                value={outputSchemaText}
+                onChange={(event) => {
+                  setSchemaEdited(true);
+                  setOutputSchemaText(event.target.value);
+                }}
+                rows={5}
+              />
+            </label>
+          </div>
+        </div>
+
+        <aside className="blueprint-summary">
+          <div className="readiness-ring">
+            <strong>{suggestedBlueprint.qualityTarget}</strong>
+            <span>目标质量分</span>
+          </div>
+          <div className="blueprint-stat-list">
+            <div>
+              <span>知识文档</span>
+              <strong>{suggestedBlueprint.knowledgeIds.length}</strong>
+            </div>
+            <div>
+              <span>规则卡片</span>
+              <strong>{suggestedBlueprint.ruleIds.length}</strong>
+            </div>
+            <div>
+              <span>工具能力</span>
+              <strong>{suggestedBlueprint.tools.length}</strong>
+            </div>
+            <div>
+              <span>评测样例</span>
+              <strong>{suggestedBlueprint.testCases.length}</strong>
+            </div>
+          </div>
+          <div className="blueprint-hint">
+            <strong>系统建议蓝图</strong>
+            <span>{suggestedBlueprint.scenario}</span>
+          </div>
+          <div className="deployment-chip">
+            <Rocket size={15} />
+            发布门槛：质量分 {suggestedBlueprint.qualityTarget}+ / 延迟 {suggestedBlueprint.latencyTarget}
+          </div>
+        </aside>
+      </div>
+
+      <div className="form-actions">
+        <button className="ghost-button" type="button" onClick={onClose}>
+          取消
+        </button>
+        <button className="primary-button" type="button" onClick={() => onCreate(name, purpose, type, inputSchema, outputSchema)}>
+          <Sparkles size={16} />
+          生成 Agent 工作台
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function KnowledgePage({
+  docs,
+  agents,
+  onOpenAgent,
+  onAddDoc,
+  onUpdateDoc,
+  onDeleteDoc,
+  onToggleDocAgent,
+}: {
+  docs: KnowledgeDoc[];
+  agents: Agent[];
+  onOpenAgent: (agentId: string) => void;
+  onAddDoc: () => void;
+  onUpdateDoc: (docId: string, patch: Partial<KnowledgeDoc>) => void;
+  onDeleteDoc: (docId: string) => void;
+  onToggleDocAgent: (docId: string, agentId: string) => void;
+}) {
+  const [selectedDocId, setSelectedDocId] = useState(docs[0]?.id ?? "");
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
+  const [testQuery, setTestQuery] = useState("合同收益分配口径");
+  const categories = Array.from(new Set(docs.map((doc) => doc.category)));
+  const visibleDocs = docs.filter((doc) => {
+    const hitCategory = category === "all" || doc.category === category;
+    const haystack = `${doc.title}${doc.category}${doc.tags.join("")}${doc.snippet}`.toLowerCase();
+    const hitQuery = haystack.includes(query.toLowerCase());
+    return hitCategory && hitQuery;
+  });
+  useEffect(() => {
+    if (!visibleDocs.some((doc) => doc.id === selectedDocId)) {
+      setSelectedDocId(visibleDocs[0]?.id ?? docs[0]?.id ?? "");
+    }
+  }, [docs, selectedDocId, visibleDocs]);
+  const selectedDoc = docs.find((doc) => doc.id === selectedDocId) ?? docs[0];
+  const searchResults = docs
+    .map((doc) => {
+      const text = `${doc.title} ${doc.tags.join(" ")} ${doc.snippet}`;
+      const score = testQuery
+        .split(/\s+/)
+        .filter(Boolean)
+        .reduce((sum, word) => sum + (text.toLowerCase().includes(word.toLowerCase()) ? 1 : 0), 0);
+      return { doc, score };
+    })
+    .filter((item) => item.score > 0 || item.doc.title.includes("合同"))
+    .slice(0, 4);
+
+  return (
+    <section className="page">
+      <div className="page-sticky-zone">
+        <PageHeader
+          eyebrow="Knowledge Base"
+          title="统一知识库"
+          description="以统一文档、标签和片段预览支撑 Agent 训练、检索和规则解释。"
+          actions={
+            <button className="primary-button" type="button" onClick={onAddDoc}>
+              <Upload size={16} />
+              模拟上传文档
+            </button>
+          }
+        />
+
+        <div className="filter-bar knowledge-filter">
+          <label className="search-box">
+            <Search size={16} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文档、标签、片段" />
+          </label>
+          <label className="select-box">
+            <Database size={16} />
+            <select value={category} onChange={(event) => setCategory(event.target.value)}>
+              <option value="all">全部分类</option>
+              {categories.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="knowledge-layout">
+        <div className="doc-list">
+          {visibleDocs.map((doc) => (
+            <button
+              className={`doc-item ${doc.id === selectedDoc?.id ? "active" : ""}`}
+              type="button"
+              key={doc.id}
+              onClick={() => setSelectedDocId(doc.id)}
+            >
+              <FileText size={17} />
+              <span>
+                <strong>{doc.title}</strong>
+                <small>{doc.category} / {doc.updatedAt}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {selectedDoc && (
+          <div className="doc-preview">
+            <div className="doc-preview-header">
+              <div className="doc-edit-head">
+                <span className="pill published">{selectedDoc.category}</span>
+                <button className="ghost-button compact danger-button" type="button" onClick={() => onDeleteDoc(selectedDoc.id)}>
+                  删除文档
+                </button>
+              </div>
+              <div className="form-grid">
+                <label>
+                  <span>文档标题</span>
+                  <input value={selectedDoc.title} onChange={(event) => onUpdateDoc(selectedDoc.id, { title: event.target.value })} />
+                </label>
+                <label>
+                  <span>分类</span>
+                  <input value={selectedDoc.category} onChange={(event) => onUpdateDoc(selectedDoc.id, { category: event.target.value })} />
+                </label>
+                <label className="wide">
+                  <span>标签</span>
+                  <input
+                    value={selectedDoc.tags.join("，")}
+                    onChange={(event) =>
+                      onUpdateDoc(selectedDoc.id, {
+                        tags: event.target.value
+                          .split(/[，,]/)
+                          .map((item) => item.trim())
+                          .filter(Boolean),
+                      })
+                    }
+                  />
+                </label>
+                <label className="wide">
+                  <span>片段预览</span>
+                  <textarea value={selectedDoc.snippet} onChange={(event) => onUpdateDoc(selectedDoc.id, { snippet: event.target.value })} rows={4} />
+                </label>
+              </div>
+            </div>
+            <div className="tag-row">
+              {selectedDoc.tags.map((tag) => (
+                <span className="tag" key={tag}>
+                  {tag}
+                </span>
+              ))}
+            </div>
+            <div className="retrieval-box">
+              <div className="section-title">
+                <Search size={16} />
+                检索测试
+              </div>
+              <input value={testQuery} onChange={(event) => setTestQuery(event.target.value)} />
+              <div className="retrieval-results">
+                {searchResults.map(({ doc, score }) => (
+                  <div key={doc.id}>
+                    <strong>{doc.title}</strong>
+                    <span>相关度 {Math.min(99, 72 + score * 9)}%</span>
+                    <p>{doc.snippet}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="linked-agents">
+              <div className="section-title">
+                <Bot size={16} />
+                Agent 关联
+              </div>
+              <div className="doc-agent-link-grid">
+                {agents.slice(0, 12).map((agent) => (
+                  <div className="doc-agent-link" key={agent.id}>
+                    <label className="link-check-body">
+                      <input
+                        type="checkbox"
+                        checked={selectedDoc.linkedAgents.includes(agent.id)}
+                        onChange={() => onToggleDocAgent(selectedDoc.id, agent.id)}
+                      />
+                      <span>
+                        <strong>{agent.name}</strong>
+                        <small>{agent.type} / {statusCopy[agent.status]}</small>
+                      </span>
+                    </label>
+                    <button className="ghost-button compact" type="button" onClick={() => onOpenAgent(agent.id)}>
+                      详情
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function RulesPage({
+  rules,
+  agents,
+  onUpdateRule,
+  onCreateRule,
+  onDeleteRule,
+  onOpenAgent,
+}: {
+  rules: RuleLibraryItem[];
+  agents: Agent[];
+  onUpdateRule: (ruleId: string, patch: Partial<Pick<RuleLibraryItem, "title" | "description" | "priority" | "category" | "tags">>) => void;
+  onCreateRule: () => void;
+  onDeleteRule: (ruleId: string) => void;
+  onOpenAgent: (agentId: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
+  const categories = Array.from(new Set(rules.map((rule) => rule.category)));
+  const visibleRules = rules.filter((rule) => {
+    const haystack = `${rule.title}${rule.description}${rule.category}${rule.tags.join("")}`.toLowerCase();
+    const hitQuery = haystack.includes(query.toLowerCase());
+    const hitCategory = category === "all" || rule.category === category;
+    return hitQuery && hitCategory;
+  });
+
+  const getLinkedAgents = (ruleId: string) => agents.filter((agent) => agent.rules.some((rule) => rule.sourceRuleId === ruleId));
+
+  return (
+    <section className="page">
+      <div className="page-sticky-zone">
+        <PageHeader
+          eyebrow="Rule Library"
+          title="统一规则库"
+          description="统一维护业务规则资产。Agent 详情页只选择和启停规则；名称、说明、优先级。"
+          actions={
+            <button className="primary-button" type="button" onClick={onCreateRule}>
+              <Plus size={16} />
+              新增规则
+            </button>
+          }
+        />
+
+        <div className="filter-bar knowledge-filter">
+          <label className="search-box">
+            <Search size={16} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索规则、标签、说明" />
+          </label>
+          <label className="select-box">
+            <Settings2 size={16} />
+            <select value={category} onChange={(event) => setCategory(event.target.value)}>
+              <option value="all">全部分类</option>
+              {categories.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="rule-library-grid">
+        {visibleRules.map((rule) => {
+          const linkedAgents = getLinkedAgents(rule.id);
+          return (
+            <div className="rule-library-card" key={rule.id}>
+              <div className="rule-library-head">
+                <span className="pill published">{rule.category}</span>
+                <div className="inline-actions">
+                  <span className="muted-text">更新：{rule.updatedAt}</span>
+                  <button className="ghost-button compact danger-button" type="button" onClick={() => onDeleteRule(rule.id)}>
+                    删除
+                  </button>
+                </div>
+              </div>
+              <label>
+                <span>规则名称</span>
+                <input value={rule.title} onChange={(event) => onUpdateRule(rule.id, { title: event.target.value })} />
+              </label>
+              <label>
+                <span>规则说明</span>
+                <textarea value={rule.description} onChange={(event) => onUpdateRule(rule.id, { description: event.target.value })} rows={3} />
+              </label>
+              <div className="rule-meta-grid">
+                <label>
+                  <span>优先级</span>
+                  <select value={rule.priority} onChange={(event) => onUpdateRule(rule.id, { priority: event.target.value as "高" | "中" | "低" })}>
+                    <option value="高">高</option>
+                    <option value="中">中</option>
+                    <option value="低">低</option>
+                  </select>
+                </label>
+                <label>
+                  <span>分类</span>
+                  <input value={rule.category} onChange={(event) => onUpdateRule(rule.id, { category: event.target.value })} />
+                </label>
+              </div>
+              <label>
+                <span>标签</span>
+                <input value={rule.tags.join("，")} onChange={(event) => onUpdateRule(rule.id, { tags: event.target.value.split(/[，,]/).map((item) => item.trim()).filter(Boolean) })} />
+              </label>
+              <div className="linked-agents-compact">
+                <strong>引用 Agent：{linkedAgents.length}</strong>
+                <div>
+                  {linkedAgents.slice(0, 5).map((agent) => (
+                    <button type="button" key={agent.id} onClick={() => onOpenAgent(agent.id)}>
+                      {agent.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ToolsPage({
+  tools,
+  agents,
+  onToggleTool,
+  onCreateTool,
+  onUpdateTool,
+  onDeleteTool,
+  onOpenAgent,
+}: {
+  tools: ToolAsset[];
+  agents: Agent[];
+  onToggleTool: (toolId: string) => void;
+  onCreateTool: () => void;
+  onUpdateTool: (toolId: string, patch: Partial<ToolAsset>) => void;
+  onDeleteTool: (toolId: string) => void;
+  onOpenAgent: (agentId: string) => void;
+}) {
+  const [category, setCategory] = useState("all");
+  const [query, setQuery] = useState("");
+  const categories = Array.from(new Set(tools.map((tool) => tool.category)));
+  const visibleTools = tools.filter((tool) => {
+    const hitCategory = category === "all" || tool.category === category;
+    const hitQuery = `${tool.name}${tool.description}${tool.category}`.toLowerCase().includes(query.toLowerCase());
+    return hitCategory && hitQuery;
+  });
+
+  return (
+    <section className="page">
+      <div className="page-sticky-zone">
+        <PageHeader
+          eyebrow="Tool Registry"
+          title="工具库"
+          description="把检索、规则、生成、路由、人工复核和接口网关沉淀成可复用工具，供不同 Agent 编排使用。"
+          actions={
+            <button className="primary-button" type="button" onClick={onCreateTool}>
+              <Plus size={16} />
+              新增工具
+            </button>
+          }
+        />
+
+        <div className="filter-bar">
+          <label className="search-box">
+            <Search size={16} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索工具名称、能力说明" />
+          </label>
+          <label className="select-box">
+            <Wrench size={16} />
+            <select value={category} onChange={(event) => setCategory(event.target.value)}>
+              <option value="all">全部工具</option>
+              {categories.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="tool-registry-grid">
+        {visibleTools.map((tool) => (
+          <div className="tool-asset-card" key={tool.id}>
+            <div className="tool-asset-head">
+              <span className={`pill ${tool.status === "启用" ? "published" : "planned"}`}>{tool.status}</span>
+              <div className="inline-actions">
+                <button className="ghost-button compact" type="button" onClick={() => onToggleTool(tool.id)}>
+                  {tool.status === "启用" ? "停用" : "启用"}
+                </button>
+                <button className="ghost-button compact danger-button" type="button" onClick={() => onDeleteTool(tool.id)}>
+                  删除
+                </button>
+              </div>
+            </div>
+            <div className="tool-edit-form">
+              <label>
+                <span>工具名称</span>
+                <input value={tool.name} onChange={(event) => onUpdateTool(tool.id, { name: event.target.value })} />
+              </label>
+              <label>
+                <span>分类</span>
+                <select value={tool.category} onChange={(event) => onUpdateTool(tool.id, { category: event.target.value as ToolAsset["category"] })}>
+                  {toolCategoryOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="wide">
+                <span>能力说明</span>
+                <textarea value={tool.description} onChange={(event) => onUpdateTool(tool.id, { description: event.target.value })} rows={3} />
+              </label>
+              <label className="wide">
+                <span>Endpoint</span>
+                <input value={tool.endpoint} onChange={(event) => onUpdateTool(tool.id, { endpoint: event.target.value })} />
+              </label>
+            </div>
+            <div className="tag-row compact-tags">
+              <span className="tag">{tool.category}</span>
+              <span className="tag">{tool.linkedAgentIds.length} 个 Agent</span>
+            </div>
+            <div className="tool-agent-links">
+              {agents.slice(0, 6).map((agent) => {
+                const linked = tool.linkedAgentIds.includes(agent.id);
+                return (
+                  <div className="mini-check-row" key={agent.id}>
+                    <label className="link-check-body">
+                      <input
+                        type="checkbox"
+                        checked={linked}
+                        onChange={() =>
+                          onUpdateTool(tool.id, {
+                            linkedAgentIds: linked ? tool.linkedAgentIds.filter((id) => id !== agent.id) : [...tool.linkedAgentIds, agent.id],
+                          })
+                        }
+                      />
+                      <span>{agent.name}</span>
+                    </label>
+                    <button className="ghost-button compact" type="button" onClick={() => onOpenAgent(agent.id)}>
+                      详情
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function EvaluationPage({
+  agents,
+  evalRuns,
+  onRunEvaluation,
+  onOpenAgent,
+}: {
+  agents: Agent[];
+  evalRuns: EvalRun[];
+  onRunEvaluation: (agentId: string) => void;
+  onOpenAgent: (agentId: string) => void;
+}) {
+  const [agentId, setAgentId] = useState(agents[0]?.id ?? "");
+  const selectedAgent = agents.find((agent) => agent.id === agentId) ?? agents[0];
+  const selectedRuns = evalRuns.filter((run) => run.agentId === selectedAgent?.id);
+  const latestRun = selectedRuns[0];
+
+  useEffect(() => {
+    if (!agents.some((agent) => agent.id === agentId)) {
+      setAgentId(agents[0]?.id ?? "");
+    }
+  }, [agentId, agents]);
+
+  return (
+    <section className="page">
+      <div className="page-sticky-zone evaluation-sticky-zone">
+        <PageHeader
+          eyebrow="Evaluation & Trace"
+          title="评估追踪"
+          description="用测试用例、回归评估、执行轨迹和反馈记录证明 Agent 能被持续训练，而不是一次性页面演示。"
+          actions={
+            <button className="primary-button" type="button" onClick={() => selectedAgent && onRunEvaluation(selectedAgent.id)}>
+              <PlayCircle size={16} />
+              运行评估
+            </button>
+          }
+        />
+
+        <div className="evaluation-control-bar">
+          <label className="select-box evaluation-agent-select">
+            <Bot size={16} />
+            <select value={selectedAgent?.id ?? ""} onChange={(event) => setAgentId(event.target.value)}>
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name} / {statusCopy[agent.status]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="eval-focus-stat">
+            <span>测试用例</span>
+            <strong>{selectedAgent?.testCases.length ?? 0}</strong>
+          </div>
+          <div className="eval-focus-stat">
+            <span>最新通过率</span>
+            <strong>{latestRun ? `${latestRun.passRate}%` : "待评估"}</strong>
+          </div>
+          <div className="eval-focus-stat">
+            <span>质量分</span>
+            <strong>{latestRun?.score ?? selectedAgent?.score ?? "-"}</strong>
+          </div>
+          <div className="eval-focus-stat">
+            <span>失败用例</span>
+            <strong>{latestRun?.failed ?? 0}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div className="evaluation-layout">
+        <section className="panel">
+          <div className="section-title">
+            <Bot size={16} />
+            当前 Agent
+          </div>
+          {selectedAgent && (
+            <div className="eval-agent-summary">
+              <strong>{selectedAgent.name}</strong>
+              <p>{selectedAgent.purpose}</p>
+              <div className="mini-grid">
+                <span>测试用例</span>
+                <strong>{selectedAgent.testCases.length}</strong>
+                <span>质量分</span>
+                <strong>{selectedAgent.score}</strong>
+                <span>版本</span>
+                <strong>{selectedAgent.version}</strong>
+              </div>
+              <button className="secondary-button full" type="button" onClick={() => onOpenAgent(selectedAgent.id)}>
+                进入详情
+                <ArrowRight size={16} />
+              </button>
+            </div>
+          )}
+        </section>
+
+        <section className="panel span-2">
+          <div className="section-title">
+            <CheckCircle2 size={16} />
+            测试用例库
+          </div>
+          <div className="case-grid">
+            {selectedAgent?.testCases.map((item) => (
+              <div className="case-card" key={item.id}>
+                <span className={`pill ${item.status === "通过" ? "published" : item.status === "需优化" ? "training" : "planned"}`}>{item.status}</span>
+                <h3>{item.name}</h3>
+                <p>{item.input}</p>
+                <strong>预期：{item.expected}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel span-3">
+          <div className="section-title">
+            <Activity size={16} />
+            评估运行记录
+          </div>
+          <div className="eval-table">
+            <div className="eval-head">
+              <span>时间</span>
+              <span>Agent</span>
+              <span>评估集</span>
+              <span>通过率</span>
+              <span>质量分</span>
+              <span>备注</span>
+            </div>
+            {selectedRuns.map((run) => {
+              const agent = agents.find((item) => item.id === run.agentId);
+              return (
+                <div className="eval-row" key={run.id}>
+                  <span>{run.time}</span>
+                  <button type="button" onClick={() => agent && onOpenAgent(agent.id)}>
+                    {agent?.name ?? run.agentId}
+                  </button>
+                  <span>{run.suite}</span>
+                  <strong>{run.passRate}%</strong>
+                  <strong>{run.score}</strong>
+                  <span>{run.notes}</span>
+                </div>
+              );
+            })}
+            {!selectedRuns.length && selectedAgent && (
+              <div className="empty-line">当前 Agent 暂无评估记录，点击“运行评估”生成一条模拟回归记录。</div>
+            )}
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function ApiCenterPage({
+  agents,
+  apiKeys,
+  onInvokeAgent,
+  onToggleApiKey,
+  onCreateApiKey,
+  onUpdateApiKey,
+  onDeleteApiKey,
+  onOpenAgent,
+}: {
+  agents: Agent[];
+  apiKeys: ApiKeyRecord[];
+  onInvokeAgent: (agentId: string, source: string, payload: string) => void;
+  onToggleApiKey: (keyId: string) => void;
+  onCreateApiKey: () => void;
+  onUpdateApiKey: (keyId: string, patch: Partial<ApiKeyRecord>) => void;
+  onDeleteApiKey: (keyId: string) => void;
+  onOpenAgent: (agentId: string) => void;
+}) {
+  const publishedAgents = agents.filter((agent) => agent.status === "published");
+  const [agentId, setAgentId] = useState(publishedAgents[0]?.id ?? agents[0]?.id ?? "");
+  const [source, setSource] = useState("演示沙箱");
+  const [payload, setPayload] = useState("请审查这份门店现金流合约，并输出风险、建议和结论。");
+  const [invokePreview, setInvokePreview] = useState<null | {
+    status: string;
+    latency: string;
+    endpoint: string;
+    source: string;
+    summary: string;
+    risk: string;
+    trace: string[];
+  }>(null);
+  const selectedAgent = agents.find((agent) => agent.id === agentId) ?? agents[0];
+  const canInvoke = Boolean(selectedAgent && selectedAgent.status === "published");
+
+  useEffect(() => {
+    setInvokePreview(null);
+  }, [selectedAgent?.id]);
+
+  const handleInvoke = () => {
+    if (!selectedAgent || !canInvoke) return;
+    const requestText = payload.trim() || "模拟请求";
+    const hitContractSignals = ["合同", "收益", "分配", "提前终止", "披露"].filter((keyword) => requestText.includes(keyword));
+    const latency = 420 + ((requestText.length * 7) % 180);
+
+    onInvokeAgent(selectedAgent.id, source, requestText);
+    setInvokePreview({
+      status: "200 OK",
+      latency: `${latency}ms`,
+      endpoint: `POST /api/agents/${selectedAgent.id}/invoke`,
+      source,
+      summary: `${selectedAgent.name} 已返回结构化结果：识别 ${hitContractSignals.length || 1} 类业务信号，输出风险、建议和结论。`,
+      risk: hitContractSignals.length >= 3 ? "中高风险，建议人工复核关键条款。" : "常规风险，建议进入业务复核队列。",
+      trace: [
+        "鉴权通过，调用方 Scope 已校验",
+        "加载 Agent Prompt、知识文档和启用规则",
+        "执行工具链 Dry-run 并生成结构化响应",
+      ],
+    });
+  };
+
+  return (
+    <section className="page">
+      <div className="page-sticky-zone">
+        <PageHeader
+          eyebrow="API Center"
+          title="接口中心"
+          description="集中展示已发布 Agent 的 mock API、鉴权状态、调用记录和请求调试器，方便说明外部系统如何接入。"
+          actions={
+            <button className="primary-button" type="button" onClick={onCreateApiKey}>
+              <Plus size={16} />
+              新增 Key
+            </button>
+          }
+        />
+      </div>
+
+      <div className="api-layout">
+        <section className="panel">
+          <div className="section-title">
+            <Code2 size={16} />
+            调用调试器
+          </div>
+          <label className="field-label" htmlFor="api-agent">
+            Agent
+          </label>
+          <select id="api-agent" value={agentId} onChange={(event) => setAgentId(event.target.value)}>
+            {agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name} / {statusCopy[agent.status]}
+              </option>
+            ))}
+          </select>
+          <label className="field-label" htmlFor="api-source">
+            调用方
+          </label>
+          <input id="api-source" value={source} onChange={(event) => setSource(event.target.value)} />
+          <label className="field-label" htmlFor="api-payload">
+            请求内容
+          </label>
+          <textarea id="api-payload" value={payload} onChange={(event) => setPayload(event.target.value)} rows={5} />
+          <button
+            className="primary-button full"
+            type="button"
+            onClick={handleInvoke}
+            disabled={!canInvoke}
+          >
+            <PlayCircle size={16} />
+            发送模拟请求
+          </button>
+          {selectedAgent?.status !== "published" && <p className="hint-text">只有已发布 Agent 才能开放接口调用。</p>}
+          {invokePreview && (
+            <div className="api-response-panel">
+              <div className="api-response-head">
+                <span className="pill published">{invokePreview.status}</span>
+                <strong>{invokePreview.latency}</strong>
+              </div>
+              <code>{invokePreview.endpoint}</code>
+              <p>{invokePreview.summary}</p>
+              <em>{invokePreview.risk}</em>
+              <div className="api-response-trace">
+                {invokePreview.trace.map((item, index) => (
+                  <div key={item}>
+                    <span>{index + 1}</span>
+                    {item}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="panel span-2">
+          <div className="section-title">
+            <Rocket size={16} />
+            已发布 Agent 接口
+          </div>
+          <div className="endpoint-list">
+            {publishedAgents.map((agent) => (
+              <div className="endpoint-card" key={agent.id}>
+                <div>
+                  <strong>{agent.name}</strong>
+                  <code>POST /api/agents/{agent.id}/invoke</code>
+                </div>
+                <span className="pill published">可调用</span>
+                <button className="secondary-button compact" type="button" onClick={() => onOpenAgent(agent.id)}>
+                  详情
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="section-title">
+            <ShieldCheck size={16} />
+            API Key
+          </div>
+          <div className="key-list">
+            {apiKeys.map((key) => (
+              <div className="key-card" key={key.id}>
+                <div className="key-card-head">
+                  <span className={`pill ${key.status === "启用" ? "published" : "planned"}`}>{key.status}</span>
+                  <div className="inline-actions">
+                    <button className="ghost-button compact" type="button" onClick={() => onToggleApiKey(key.id)}>
+                      {key.status === "启用" ? "停用" : "启用"}
+                    </button>
+                    <button className="ghost-button compact danger-button" type="button" onClick={() => onDeleteApiKey(key.id)}>
+                      删除
+                    </button>
+                  </div>
+                </div>
+                <label>
+                  <span>调用方</span>
+                  <input value={key.name} onChange={(event) => onUpdateApiKey(key.id, { name: event.target.value })} />
+                </label>
+                <label>
+                  <span>Scope</span>
+                  <input value={key.scope} onChange={(event) => onUpdateApiKey(key.id, { scope: event.target.value })} />
+                </label>
+                <label>
+                  <span>最近使用</span>
+                  <input value={key.lastUsed} onChange={(event) => onUpdateApiKey(key.id, { lastUsed: event.target.value })} />
+                </label>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel span-2">
+          <div className="section-title">
+            <Activity size={16} />
+            最近调用记录
+          </div>
+          <div className="api-calls full-calls">
+            {agents
+              .flatMap((agent) => agent.apiCalls.map((call) => ({ ...call, agentName: agent.name })))
+              .slice(0, 12)
+              .map((call) => (
+                <div key={`${call.agentName}-${call.id}`}>
+                  <span>{call.time}</span>
+                  <strong>{call.agentName} / {call.source}</strong>
+                  <em>{call.result}</em>
+                </div>
+              ))}
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function AgentDetailPage({
+  agent,
+  docs,
+  agents,
+  trainingAgentId,
+  trainingStep,
+  onBack,
+  onUpdateAgent,
+  onTrain,
+  onFeedback,
+  onPublish,
+  onOpenKnowledge,
+  onToggleKnowledgeLink,
+  onUnpublishAgent,
+  onRunEvaluation,
+  onNotify,
+  ruleLibrary,
+  onAttachRule,
+  onCreateRule,
+  onUpdateAgentRule,
+  onDetachRule,
+}: {
+  agent: Agent;
+  docs: KnowledgeDoc[];
+  agents: Agent[];
+  trainingAgentId: string | null;
+  trainingStep: number;
+  onBack: () => void;
+  onUpdateAgent: (agentId: string, updater: (agent: Agent) => Agent) => void;
+  onTrain: (agentId: string) => void;
+  onFeedback: (agentId: string, score: number, note: string) => void;
+  onPublish: (agentId: string, targetCellKey: string, navigateAfterPublish?: boolean) => void;
+  onOpenKnowledge: () => void;
+  onToggleKnowledgeLink: (docId: string, agentId: string) => void;
+  onUnpublishAgent: (agentId: string) => void;
+  onRunEvaluation: (agentId: string) => void;
+  onNotify: (message: string) => void;
+  ruleLibrary: RuleLibraryItem[];
+  onAttachRule: (agentId: string, ruleId: string) => void;
+  onCreateRule: (agentId?: string) => void;
+  onUpdateAgentRule: (agentId: string, localRuleId: string, patch: Partial<RuleItem>) => void;
+  onDetachRule: (agentId: string, localRuleId: string) => void;
+}) {
+  const [feedbackScore, setFeedbackScore] = useState(agent.feedbackScore ?? 5);
+  const [feedbackNote, setFeedbackNote] = useState(agent.feedbackNote ?? "输出建议更具体，适合纳入下一轮优化。");
+  const [publishWork, setPublishWork] = useState(agent.matrixCellKey?.split(":")[0] ?? "contractual");
+  const [publishFunc, setPublishFunc] = useState(agent.matrixCellKey?.split(":")[1] ?? "contract-registrar");
+  const [ruleToAttach, setRuleToAttach] = useState(ruleLibrary[0]?.id ?? "");
+  const [activeDetailSection, setActiveDetailSection] = useState("detail-overview");
+  const [detailSlideDirection, setDetailSlideDirection] = useState<"forward" | "backward">("forward");
+  const isTraining = trainingAgentId === agent.id;
+
+  useEffect(() => {
+    setFeedbackScore(agent.feedbackScore ?? 5);
+    setFeedbackNote(agent.feedbackNote ?? "输出建议更具体，适合纳入下一轮优化。");
+    setPublishWork(agent.matrixCellKey?.split(":")[0] ?? "contractual");
+    setPublishFunc(agent.matrixCellKey?.split(":")[1] ?? "contract-registrar");
+  }, [agent.id, agent.feedbackNote, agent.feedbackScore, agent.matrixCellKey]);
+
+  const linkedDocs = docs.filter((doc) => agent.knowledgeIds.includes(doc.id));
+  const enabledTools = agent.tools.filter((tool) => tool.enabled).length;
+  const enabledRules = agent.rules.filter((rule) => rule.enabled).length;
+  const passedCases = agent.testCases.filter((testCase) => testCase.status === "通过").length;
+  const agentBlueprint = inferAgentBlueprint(agent.name, agent.type, agent.purpose);
+  const inputSchema = getAgentInputSchema(agent, agentBlueprint);
+  const outputSchema = getAgentOutputSchema(agent, agentBlueprint);
+  const knowledgeReadiness = Math.min(100, Math.round((agent.knowledgeIds.length / Math.max(agentBlueprint.knowledgeIds.length, 1)) * 100));
+  const ruleReadiness = Math.min(100, Math.round((enabledRules / Math.max(agentBlueprint.ruleIds.length, 1)) * 100));
+  const evalReadiness = Math.min(100, Math.round(((passedCases + (agent.trainedOnce ? 1 : 0)) / Math.max(agent.testCases.length, 1)) * 100));
+  const toolReadiness = Math.min(100, Math.round((enabledTools / Math.max(agent.tools.length, 1)) * 100));
+  const readinessScore = Math.round((knowledgeReadiness + ruleReadiness + evalReadiness + toolReadiness + Math.min(agent.score, 100)) / 5);
+  const productionChecks = [
+    { label: "知识覆盖", value: knowledgeReadiness, detail: `${agent.knowledgeIds.length} 份文档` },
+    { label: "规则覆盖", value: ruleReadiness, detail: `${enabledRules} 条启用` },
+    { label: "工具可用", value: toolReadiness, detail: `${enabledTools}/${agent.tools.length} 个工具` },
+    { label: "评测通过", value: evalReadiness, detail: `${passedCases}/${agent.testCases.length} 个样例` },
+  ];
+  const readinessGaps = productionChecks.filter((check) => check.value < 100);
+  const executionStages = [
+    { label: "输入契约", value: inputSchema.join(" / ") },
+    { label: "规划器", value: `${agent.workflow.filter((step) => step.enabled).length} 个步骤` },
+    { label: "工具调用", value: `${enabledTools} 个启用工具` },
+    { label: "边界校验", value: `${agent.guardrails.length} 条安全边界` },
+    { label: "结构化输出", value: outputSchema.join(" / ") },
+  ];
+  const detailSections = [
+    { id: "detail-overview", label: "概览", summary: `${readinessScore} 分预检` },
+    { id: "detail-prompt", label: "Prompt 编辑器", summary: "角色与输出" },
+    { id: "detail-tools", label: "工具与边界", summary: `${enabledTools} 工具 / ${agent.guardrails.length} 边界` },
+    { id: "detail-workflow", label: "工作流管理", summary: `${agent.workflow.filter((step) => step.enabled).length} 个步骤` },
+    { id: "detail-assets", label: "知识与规则", summary: `${agent.knowledgeIds.length} 文档 / ${enabledRules} 规则` },
+    { id: "detail-training", label: "训练评估", summary: `${passedCases}/${agent.testCases.length} 用例` },
+    { id: "detail-release", label: "发布接口", summary: "接口配置" },
+  ];
+
+  useEffect(() => {
+    setActiveDetailSection("detail-overview");
+    setDetailSlideDirection("forward");
+  }, [agent.id]);
+
+  const openDetailSection = (sectionId: string) => {
+    const currentIndex = detailSections.findIndex((section) => section.id === activeDetailSection);
+    const nextIndex = detailSections.findIndex((section) => section.id === sectionId);
+    setDetailSlideDirection(nextIndex >= currentIndex ? "forward" : "backward");
+    setActiveDetailSection(sectionId);
+  };
+
+  const paneClass = (sectionId: string, extra = "") =>
+    `detail-pane-item detail-pane-${sectionId.replace("detail-", "")} ${activeDetailSection === sectionId ? `active slide-${detailSlideDirection}` : ""} ${extra}`.trim();
+
+  const addAgentTool = () => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      tools: [
+        ...item.tools,
+        {
+          id: `tool-${Date.now()}`,
+          name: "新增工具能力",
+          description: "补充该 Agent 在执行流程中可调用的工具能力。",
+          enabled: true,
+        },
+      ],
+    }));
+    onNotify("Agent 工具能力已新增");
+  };
+
+  const deleteAgentTool = (toolId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      tools: item.tools.filter((tool) => tool.id !== toolId),
+    }));
+    onNotify("Agent 工具能力已删除");
+  };
+
+  const addGuardrail = () => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      guardrails: [...item.guardrails, "新增安全边界：请填写限制条件和人工复核要求。"],
+    }));
+    onNotify("安全边界已新增");
+  };
+
+  const updateGuardrail = (index: number, value: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      guardrails: item.guardrails.map((guardrail, targetIndex) => (targetIndex === index ? value : guardrail)),
+    }));
+  };
+
+  const deleteGuardrail = (index: number) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      guardrails: item.guardrails.filter((_, targetIndex) => targetIndex !== index),
+    }));
+    onNotify("安全边界已删除");
+  };
+
+  const addWorkflowStep = () => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: [
+        ...item.workflow,
+        {
+          id: `w-${Date.now()}`,
+          title: "新增步骤",
+          description: "补充该 Agent 的业务处理动作。",
+          enabled: true,
+        },
+      ],
+    }));
+    onNotify("工作流步骤已新增");
+  };
+
+  const deleteWorkflowStep = (stepId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.filter((step) => step.id !== stepId),
+    }));
+    onNotify("工作流步骤已删除");
+  };
+
+  const addTestCase = () => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      testCases: [
+        ...item.testCases,
+        {
+          id: `tc-${Date.now()}`,
+          name: "新增测试用例",
+          input: "填写一条标准输入样例。",
+          expected: "填写预期结构化输出。",
+          status: "待验证",
+        },
+      ],
+    }));
+    onNotify("测试用例已新增");
+  };
+
+  const deleteTestCase = (testCaseId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      testCases: item.testCases.filter((testCase) => testCase.id !== testCaseId),
+    }));
+    onNotify("测试用例已删除");
+  };
+
+  return (
+    <section className="page detail-page">
+      <div className="detail-topbar">
+        <button className="ghost-button" type="button" onClick={onBack}>
+          <ArrowLeft size={16} />
+          返回 Agent 管理
+        </button>
+        <div className="detail-actions">
+          <span className={`pill ${agent.status === "published" ? "published" : agent.status === "trained" ? "training" : "planned"}`}>
+            {statusCopy[agent.status]}
+          </span>
+          <span className="version-badge">{agent.version}</span>
+        </div>
+      </div>
+
+      <PageHeader
+        eyebrow={agent.type}
+        title={agent.name}
+        description={agent.purpose}
+        actions={
+          <>
+            <button className="secondary-button" type="button" onClick={() => onRunEvaluation(agent.id)}>
+              <CheckCircle2 size={16} />
+              运行评估
+            </button>
+            {agent.status === "published" && (
+              <button className="ghost-button" type="button" onClick={() => onUnpublishAgent(agent.id)}>
+                下线
+              </button>
+            )}
+            <button className="primary-button" type="button" onClick={() => onTrain(agent.id)} disabled={isTraining}>
+              {isTraining ? <RefreshCw className="spin" size={16} /> : <PlayCircle size={16} />}
+              {isTraining ? "训练中" : agent.trainedOnce ? "继续训练" : "开始训练"}
+            </button>
+          </>
+        }
+        sectionNav={
+          <nav className="detail-section-nav" aria-label="Agent 详情板块导航">
+            {detailSections.map((section, index) => (
+              <button
+                className={`detail-section-card ${activeDetailSection === section.id ? "active" : ""}`}
+                type="button"
+                key={section.id}
+                onClick={() => openDetailSection(section.id)}
+              >
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <strong>{section.label}</strong>
+                <small>{section.summary}</small>
+              </button>
+            ))}
+          </nav>
+        }
+      />
+
+      <div className="detail-grid detail-page-stage">
+        <div className={paneClass("detail-overview", "detail-block-heading span-2")}>
+          <span>01</span>
+          <div>
+            <strong>概览</strong>
+            <p>查看当前 Agent 的上线预检、生命周期、矩阵落位和基础运行状态。</p>
+          </div>
+        </div>
+
+        <div className={paneClass("detail-overview", "agent-studio-hero span-2")}>
+          <div className="studio-score-card">
+            <div className="score-orbit">
+              <strong>{readinessScore}</strong>
+              <span>上线预检</span>
+            </div>
+            <div className="readiness-copy">
+              <div className="eyebrow">Production Readiness</div>
+              <h2>{readinessScore >= 88 ? "接近可发布状态" : "需要继续训练校准"}</h2>
+              <p>
+                结合知识覆盖、规则覆盖、工具可用、评测通过率和当前质量分生成预检结果，帮助员工知道下一步该补知识、补规则还是补样例。
+              </p>
+              <div className="readiness-summary-list">
+                <div>
+                  <span>发布门槛</span>
+                  <strong>{agentBlueprint.qualityTarget}+</strong>
+                </div>
+                <div>
+                  <span>当前质量</span>
+                  <strong>{agent.score}</strong>
+                </div>
+                <div>
+                  <span>待补项</span>
+                  <strong>{readinessGaps.length ? `${readinessGaps.length} 项` : "0 项"}</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="studio-check-grid">
+            {productionChecks.map((check) => (
+              <div className="studio-check" key={check.label}>
+                <div>
+                  <span>{check.label}</span>
+                  <strong>{check.value}%</strong>
+                </div>
+                <div className="bar-track">
+                  <span style={{ width: `${check.value}%` }} />
+                </div>
+                <small>{check.detail}</small>
+              </div>
+            ))}
+          </div>
+
+          <div className="execution-map">
+            {executionStages.map((stage, index) => (
+              <div className="execution-node" key={stage.label}>
+                <span>{index + 1}</span>
+                <strong>{stage.label}</strong>
+                <small>{stage.value}</small>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <section className={paneClass("detail-overview", "panel overview-panel span-2")}>
+          <div className="section-title">
+            <Activity size={16} />
+            概览
+          </div>
+          <div className="overview-metrics">
+            <Metric label="当前评分" value={String(agent.score)} tone={agent.score > 85 ? "green" : "amber"} />
+            <Metric label="生命周期" value={statusCopy[agent.status]} />
+            <Metric label="矩阵节点" value={agent.matrixCellKey ? "已放置" : "未放置"} />
+          </div>
+          <div className="mini-grid wide">
+            <span>节点</span>
+            <strong>{agent.matrixCellKey ? describeCell(agent.matrixCellKey) : "发布时选择"}</strong>
+            <span>案例</span>
+            <strong>{agent.caseUploaded ? "已上传模拟案例" : "待上传模拟案例"}</strong>
+          </div>
+        </section>
+
+        <div className={paneClass("detail-prompt", "detail-block-heading span-2")}>
+          <span>02</span>
+          <div>
+            <strong>Prompt 编辑器</strong>
+            <p>维护 Agent 的角色、任务边界、输出结构和人工复核要求。</p>
+          </div>
+        </div>
+
+        <section className={paneClass("detail-prompt", "panel prompt-panel span-2")}>
+          <div className="section-title">
+            <Sparkles size={16} />
+            Prompt 编辑器
+          </div>
+          <textarea
+            className="prompt-editor"
+            value={agent.prompt}
+            onChange={(event) => onUpdateAgent(agent.id, (item) => ({ ...item, prompt: event.target.value }))}
+          />
+        </section>
+
+        <div className={paneClass("detail-tools", "detail-block-heading span-2")}>
+          <span>03</span>
+          <div>
+            <strong>工具与边界</strong>
+            <p>配置 Agent 可调用的工具能力，并明确安全边界、人工复核和禁止事项。</p>
+          </div>
+        </div>
+
+        <section className={paneClass("detail-tools", "panel")}>
+          <div className="section-title with-action">
+            <span>
+              <Wrench size={16} />
+              工具能力
+            </span>
+            <button className="ghost-button compact" type="button" onClick={addAgentTool}>
+              <Plus size={15} />
+              添加工具
+            </button>
+          </div>
+          <div className="agent-tool-list">
+            {agent.tools.map((tool) => (
+              <div className="agent-tool-card" key={tool.id}>
+                <label className="tool-enabled">
+                  <input
+                    type="checkbox"
+                    checked={tool.enabled}
+                    onChange={() =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        tools: item.tools.map((target) => (target.id === tool.id ? { ...target, enabled: !target.enabled } : target)),
+                      }))
+                    }
+                  />
+                  <span>{tool.enabled ? "启用" : "停用"}</span>
+                </label>
+                <input
+                  value={tool.name}
+                  onChange={(event) =>
+                    onUpdateAgent(agent.id, (item) => ({
+                      ...item,
+                      tools: item.tools.map((target) => (target.id === tool.id ? { ...target, name: event.target.value } : target)),
+                    }))
+                  }
+                  aria-label="工具名称"
+                />
+                <textarea
+                  value={tool.description}
+                  onChange={(event) =>
+                    onUpdateAgent(agent.id, (item) => ({
+                      ...item,
+                      tools: item.tools.map((target) => (target.id === tool.id ? { ...target, description: event.target.value } : target)),
+                    }))
+                  }
+                  rows={2}
+                  aria-label="工具说明"
+                />
+                <button className="ghost-button compact danger-button" type="button" onClick={() => deleteAgentTool(tool.id)}>
+                  删除
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className={paneClass("detail-tools", "panel")}>
+          <div className="section-title with-action">
+            <span>
+              <ShieldCheck size={16} />
+              安全边界
+            </span>
+            <button className="ghost-button compact" type="button" onClick={addGuardrail}>
+              <Plus size={15} />
+              添加边界
+            </button>
+          </div>
+          <div className="guardrail-list">
+            {agent.guardrails.map((item, index) => (
+              <div className="guardrail-item editable-guardrail" key={`${item}-${index}`}>
+                <CheckCircle2 size={15} />
+                <input value={item} onChange={(event) => updateGuardrail(index, event.target.value)} aria-label="安全边界" />
+                <button className="ghost-button compact danger-button" type="button" onClick={() => deleteGuardrail(index)}>
+                  删除
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className={paneClass("detail-workflow", "detail-block-heading span-2")}>
+          <span>04</span>
+          <div>
+            <strong>工作流管理</strong>
+            <p>把 Agent 的业务处理过程拆成可启停、可编辑、可追踪的执行步骤。</p>
+          </div>
+        </div>
+
+        <section className={paneClass("detail-workflow", "panel span-2")}>
+          <div className="section-title with-action">
+            <span>
+              <Route size={16} />
+              工作流步骤
+            </span>
+            <button className="ghost-button compact" type="button" onClick={addWorkflowStep}>
+              <Plus size={15} />
+              添加步骤
+            </button>
+          </div>
+          <div className="workflow-list">
+            {agent.workflow.map((step, index) => (
+              <div className="workflow-step" key={step.id}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={step.enabled}
+                    onChange={() =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        workflow: item.workflow.map((target) => (target.id === step.id ? { ...target, enabled: !target.enabled } : target)),
+                      }))
+                    }
+                  />
+                  <span>{index + 1}</span>
+                </label>
+                <input
+                  value={step.title}
+                  onChange={(event) =>
+                    onUpdateAgent(agent.id, (item) => ({
+                      ...item,
+                      workflow: item.workflow.map((target) => (target.id === step.id ? { ...target, title: event.target.value } : target)),
+                    }))
+                  }
+                />
+                <textarea
+                  value={step.description}
+                  onChange={(event) =>
+                    onUpdateAgent(agent.id, (item) => ({
+                      ...item,
+                      workflow: item.workflow.map((target) => (target.id === step.id ? { ...target, description: event.target.value } : target)),
+                    }))
+                  }
+                  rows={2}
+                />
+                <button className="ghost-button compact danger-button" type="button" onClick={() => deleteWorkflowStep(step.id)}>
+                  删除
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className={paneClass("detail-assets", "detail-block-heading span-2")}>
+          <span>05</span>
+          <div>
+            <strong>知识与规则</strong>
+            <p>选择统一知识库文档和统一规则库资产，形成可复用、可追溯的业务能力。</p>
+          </div>
+        </div>
+
+        <section className={paneClass("detail-assets", "panel")}>
+          <div className="section-title">
+            <Database size={16} />
+            知识库关联
+          </div>
+          <div className="doc-chip-list">
+            {docs.map((doc) => (
+              <label className={`doc-chip ${agent.knowledgeIds.includes(doc.id) ? "active" : ""}`} key={doc.id}>
+                <input
+                  type="checkbox"
+                  checked={agent.knowledgeIds.includes(doc.id)}
+                  onChange={() => onToggleKnowledgeLink(doc.id, agent.id)}
+                />
+                <span>{doc.title}</span>
+              </label>
+            ))}
+          </div>
+          <button className="ghost-button compact" type="button" onClick={onOpenKnowledge}>
+            查看统一知识库
+            <ArrowRight size={15} />
+          </button>
+        </section>
+
+        <section className={paneClass("detail-assets", "panel")}>
+          <div className="section-title with-action">
+            <span>
+              <Settings2 size={16} />
+              规则卡片
+            </span>
+            <button className="ghost-button compact" type="button" onClick={() => onCreateRule(agent.id)}>
+              <Plus size={15} />
+              新增规则
+            </button>
+          </div>
+          <div className="rule-picker">
+            <select value={ruleToAttach} onChange={(event) => setRuleToAttach(event.target.value)}>
+              {ruleLibrary.map((rule) => (
+                <option key={rule.id} value={rule.id}>
+                  {rule.category} / {rule.title}
+                </option>
+              ))}
+            </select>
+            <button className="secondary-button compact" type="button" onClick={() => onAttachRule(agent.id, ruleToAttach)}>
+              选择规则
+            </button>
+          </div>
+          <div className="rule-list">
+            {agent.rules.map((rule) => (
+              <div className="rule-card editable-rule" key={rule.id}>
+                <label className="rule-switch">
+                  <input
+                    type="checkbox"
+                    checked={rule.enabled}
+                    onChange={() =>
+                      onUpdateAgentRule(agent.id, rule.id, {
+                        enabled: !rule.enabled,
+                      })
+                    }
+                  />
+                  <span>{rule.enabled ? "启用" : "停用"}</span>
+                </label>
+                <select
+                  value={rule.priority}
+                  onChange={(event) =>
+                    onUpdateAgentRule(agent.id, rule.id, {
+                      priority: event.target.value as "高" | "中" | "低",
+                    })
+                  }
+                  aria-label={`${rule.title} 优先级`}
+                >
+                  <option value="高">高</option>
+                  <option value="中">中</option>
+                  <option value="低">低</option>
+                </select>
+                <input
+                  value={rule.title}
+                  onChange={(event) =>
+                    onUpdateAgentRule(agent.id, rule.id, {
+                      title: event.target.value,
+                    })
+                  }
+                  aria-label="规则名称"
+                />
+                <textarea
+                  value={rule.description}
+                  onChange={(event) =>
+                    onUpdateAgentRule(agent.id, rule.id, {
+                      description: event.target.value,
+                    })
+                  }
+                  aria-label="规则说明"
+                  rows={2}
+                />
+                <button
+                  className="ghost-button compact danger-button"
+                  type="button"
+                  onClick={() => onDetachRule(agent.id, rule.id)}
+                >
+                  移除
+                </button>
+                <small className="rule-source">来源：{rule.sourceRuleId ? "统一规则库" : "本地规则"}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className={paneClass("detail-training", "detail-block-heading span-2")}>
+          <span>06</span>
+          <div>
+            <strong>训练评估</strong>
+            <p>运行训练、评估、测试用例、人工反馈和版本追踪，证明 Agent 能持续优化。</p>
+          </div>
+        </div>
+
+        <section className={paneClass("detail-training", "panel span-2")}>
+          <div className="section-title with-action">
+            <span>
+              <Upload size={16} />
+              训练运行控制台
+            </span>
+            <span className={`pill ${agent.trainedOnce ? "published" : "training"}`}>{agent.trainedOnce ? "已有训练版本" : "等待首轮训练"}</span>
+          </div>
+
+          <div className="training-console">
+            <div className="training-control-panel">
+              <div className="run-config-head">
+                <div>
+                  <div className="eyebrow">Training Recipe</div>
+                  <h3>{agentBlueprint.scenario}</h3>
+                </div>
+                <span>{agentBlueprint.latencyTarget}</span>
+              </div>
+
+              <div className="dataset-grid">
+                <div>
+                  <strong>{agent.testCases.length}</strong>
+                  <span>评测样例</span>
+                </div>
+                <div>
+                  <strong>{linkedDocs.length}</strong>
+                  <span>知识片段</span>
+                </div>
+                <div>
+                  <strong>{enabledRules}</strong>
+                  <span>启用规则</span>
+                </div>
+                <div>
+                  <strong>{agentBlueprint.qualityTarget}</strong>
+                  <span>质量门槛</span>
+                </div>
+              </div>
+
+              <div className="training-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => {
+                    onUpdateAgent(agent.id, (item) => ({
+                      ...item,
+                      caseUploaded: true,
+                      timeline: [
+                        { id: `case-${Date.now()}`, title: "载入训练样例集", description: "已载入标准案例、反例和预期输出。", time: nowLabel() },
+                        ...item.timeline,
+                      ],
+                    }));
+                    onNotify("训练样例集已载入");
+                  }}
+                >
+                  <Upload size={16} />
+                  {agent.caseUploaded ? "重新载入样例集" : "载入样例集"}
+                </button>
+                <button className="secondary-button" type="button" onClick={() => onRunEvaluation(agent.id)}>
+                  <CheckCircle2 size={16} />
+                  仅运行评测
+                </button>
+                <button className="primary-button" type="button" onClick={() => onTrain(agent.id)} disabled={isTraining}>
+                  {isTraining ? <RefreshCw className="spin" size={16} /> : <PlayCircle size={16} />}
+                  {isTraining ? "训练运行中" : "运行训练"}
+                </button>
+              </div>
+            </div>
+
+            <div className="run-trace-panel">
+              <div className="run-config-head">
+                <div>
+                  <div className="eyebrow">Trace Preview</div>
+                  <h3>执行链路</h3>
+                </div>
+                <span>{isTraining ? "Live" : "Ready"}</span>
+              </div>
+
+              <div className="trace-ladder">
+                {trainingSteps.map((step, index) => (
+                  <div className={`trace-ladder-step ${isTraining && index <= trainingStep ? "active" : agent.trainedOnce ? "done" : ""}`} key={step}>
+                    <span>{index + 1}</span>
+                    <strong>{step}</strong>
+                    <small>{index <= trainingStep || agent.trainedOnce ? "已采集指标" : "等待运行"}</small>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="quality-delta-grid">
+            <div>
+              <span>训练前质量</span>
+              <strong>{agent.beforeReport.score}</strong>
+              <small>{agent.beforeReport.summary}</small>
+            </div>
+            <div>
+              <span>训练后目标</span>
+              <strong>{agent.afterReport.score}</strong>
+              <small>{agent.afterReport.summary}</small>
+            </div>
+            <div>
+              <span>当前版本</span>
+              <strong>{agent.version}</strong>
+              <small>{agent.trainedOnce ? "已生成训练版本，可继续评测或发布。" : "首轮训练后生成新版本。"}</small>
+            </div>
+          </div>
+
+          <div className="report-compare">
+            <ReportCard report={agent.beforeReport} active={!agent.trainedOnce} />
+            <ReportCard report={agent.afterReport} active={agent.trainedOnce} />
+          </div>
+
+          <div className="feedback-box studio-feedback">
+            <div>
+              <div className="section-title small">
+                <Star size={16} />
+                人工反馈
+              </div>
+              <div className="rating-row">
+                {[1, 2, 3, 4, 5].map((score) => (
+                  <button
+                    className={`rating-button ${score <= feedbackScore ? "active" : ""}`}
+                    type="button"
+                    key={score}
+                    onClick={() => setFeedbackScore(score)}
+                    aria-label={`${score} 分`}
+                  >
+                    <Star size={15} />
+                  </button>
+                ))}
+              </div>
+            </div>
+            <textarea value={feedbackNote} onChange={(event) => setFeedbackNote(event.target.value)} rows={3} />
+            <button className="secondary-button" type="button" onClick={() => onFeedback(agent.id, feedbackScore, feedbackNote)}>
+              <Save size={16} />
+              纳入下一轮
+            </button>
+            {agent.feedbackSaved && <span className="feedback-saved">已进入优化样本池</span>}
+          </div>
+        </section>
+
+        <section className={paneClass("detail-training", "panel span-2")}>
+          <div className="section-title with-action">
+            <span>
+              <CheckCircle2 size={16} />
+              测试用例库
+            </span>
+            <button className="ghost-button compact" type="button" onClick={addTestCase}>
+              <Plus size={15} />
+              添加用例
+            </button>
+          </div>
+          <div className="case-grid">
+            {agent.testCases.map((testCase) => (
+              <div className="case-card editable" key={testCase.id}>
+                <select
+                  value={testCase.status}
+                  onChange={(event) =>
+                    onUpdateAgent(agent.id, (item) => ({
+                      ...item,
+                      testCases: item.testCases.map((target) =>
+                        target.id === testCase.id ? { ...target, status: event.target.value as "通过" | "待验证" | "需优化" } : target,
+                      ),
+                    }))
+                  }
+                >
+                  <option value="通过">通过</option>
+                  <option value="待验证">待验证</option>
+                  <option value="需优化">需优化</option>
+                </select>
+                <input
+                  value={testCase.name}
+                  onChange={(event) =>
+                    onUpdateAgent(agent.id, (item) => ({
+                      ...item,
+                      testCases: item.testCases.map((target) => (target.id === testCase.id ? { ...target, name: event.target.value } : target)),
+                    }))
+                  }
+                />
+                <textarea
+                  value={testCase.input}
+                  onChange={(event) =>
+                    onUpdateAgent(agent.id, (item) => ({
+                      ...item,
+                      testCases: item.testCases.map((target) => (target.id === testCase.id ? { ...target, input: event.target.value } : target)),
+                    }))
+                  }
+                  rows={2}
+                />
+                <textarea
+                  value={testCase.expected}
+                  onChange={(event) =>
+                    onUpdateAgent(agent.id, (item) => ({
+                      ...item,
+                      testCases: item.testCases.map((target) => (target.id === testCase.id ? { ...target, expected: event.target.value } : target)),
+                    }))
+                  }
+                  rows={2}
+                />
+                <button className="ghost-button compact danger-button" type="button" onClick={() => deleteTestCase(testCase.id)}>
+                  删除用例
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className={paneClass("detail-training", "panel")}>
+          <div className="section-title">
+            <Activity size={16} />
+            追踪评估
+          </div>
+          <div className="trace-list">
+            {agent.trace.map((item, index) => (
+              <div className="trace-item" key={item}>
+                <span>{index + 1}</span>
+                {item}
+              </div>
+            ))}
+          </div>
+          <div className="doc-snippet">
+            <strong>关联知识片段</strong>
+            <p>{linkedDocs[0]?.snippet ?? "尚未关联知识库文档。"}</p>
+          </div>
+        </section>
+
+        <section className={paneClass("detail-training", "panel")}>
+          <div className="section-title">
+            <RefreshCw size={16} />
+            版本时间线
+          </div>
+          <div className="timeline">
+            {agent.timeline.map((item) => (
+              <div className="timeline-item" key={item.id}>
+                <span>{item.time}</span>
+                <strong>{item.title}</strong>
+                <p>{item.description}</p>
+                {item.metrics && (
+                  <div className="timeline-metric-grid">
+                    {item.metrics.map((metric) => (
+                      <div className={`timeline-metric ${metric.tone ?? "neutral"}`} key={`${item.id}-${metric.label}`}>
+                        <span>{metric.label}</span>
+                        <strong>{metric.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {item.steps && (
+                  <div className="timeline-step-list">
+                    {item.steps.map((step) => (
+                      <div className={`timeline-step ${step.status === "需关注" ? "attention" : ""}`} key={`${item.id}-${step.title}`}>
+                        <span>{step.status}</span>
+                        <strong>{step.title}</strong>
+                        <em>{step.metric}</em>
+                        <p>{step.detail}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {item.changes && (
+                  <ul className="timeline-change-list">
+                    {item.changes.map((change) => (
+                      <li key={`${item.id}-${change}`}>{change}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className={paneClass("detail-release", "detail-block-heading span-2")}>
+          <span>07</span>
+          <div>
+            <strong>发布接口</strong>
+            <p>选择矩阵节点并开放 mock API，展示 Agent 如何被外部系统调用。</p>
+          </div>
+        </div>
+
+        <section className={paneClass("detail-release", "panel span-2 publish-panel")}>
+          <div className="section-title">
+            <Rocket size={16} />
+            发布区
+          </div>
+          <div className="publish-grid">
+            <label>
+              <span>Work Flow</span>
+              <select value={publishWork} onChange={(event) => setPublishWork(event.target.value)}>
+                {workFlows.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Functional Flow</span>
+              <select value={publishFunc} onChange={(event) => setPublishFunc(event.target.value)}>
+                {functionalFlows.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => onPublish(agent.id, cellKey(publishWork, publishFunc), true)}
+              disabled={agent.status === "draft" && !agent.trainedOnce}
+            >
+              <Rocket size={16} />
+              发布到节点
+            </button>
+          </div>
+        </section>
+
+        <ApiCard agent={agent} className={paneClass("detail-release", "api-card span-2")} />
+      </div>
+    </section>
+  );
+}
+
+function ReportCard({ report, active }: { report: Agent["beforeReport"]; active: boolean }) {
+  return (
+    <div className={`report-card ${active ? "active" : ""}`}>
+      <div className="report-head">
+        <strong>{report.title}</strong>
+        <span>{report.score}</span>
+      </div>
+      <p>{report.summary}</p>
+      <div className="report-meta">
+        {report.meta.map((item) => (
+          <span key={item.label}>
+            {item.label}: <strong>{item.value}</strong>
+          </span>
+        ))}
+      </div>
+      <ul>
+        {report.bullets.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ApiCard({ agent, className = "api-card" }: { agent: Agent; className?: string }) {
+  const endpoint = `https://api.drip-connect.ai/v1/agents/${agent.id}`;
+  const exampleRequest = `{
+  "input": "（上传合同内容或工单描述）",
+  "options": {
+    "format": "structured",
+    "language": "zh-CN"
+  }
+}`;
+  const fallbackCalls = [
+    { time: "2024-12-15 17:01", source: "TicketSystem", latency: "890ms" },
+    { time: "2024-12-15 16:44", source: "TicketSystem", latency: "760ms" },
+    { time: "2024-12-15 15:33", source: "TicketSystem", latency: "1020ms" },
+  ];
+  const callRows = agent.apiCalls.length
+    ? agent.apiCalls.slice(0, 3).map((call, index) => ({
+        time: call.time,
+        source: call.source,
+        latency: `${760 + index * 130}ms`,
+      }))
+    : fallbackCalls;
+
+  return (
+    <section className={className}>
+      <div className="api-card-head">
+        <div className="section-title">
+          <Code2 size={16} />
+          API 接口
+        </div>
+      </div>
+
+      <div className="api-interface-grid">
+        <section className="api-endpoint-block">
+          <div className="section-title small">调用地址</div>
+          <div className="api-endpoint-line">
+            <span>POST</span>
+            <code>{endpoint}</code>
+          </div>
+        </section>
+
+        <section className="api-request-block">
+          <div className="section-title small">示例请求</div>
+          <pre>{exampleRequest}</pre>
+        </section>
+
+        <section className="api-recent-block">
+          <div className="section-title small">最近调用记录</div>
+          <div className="api-call-records">
+            {callRows.map((call) => (
+              <div key={`${call.time}-${call.source}-${call.latency}`}>
+                <span>{call.time}</span>
+                <strong>{call.source}</strong>
+                <em>{call.latency}</em>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+      {agent.apiCalls.length > 0 && (
+        <div className="api-calls compact-history">
+          {agent.apiCalls.slice(0, 3).map((call) => (
+            <div key={call.id}>
+              <span>{call.time}</span>
+              <strong>{call.source}</strong>
+              <em>{call.result}</em>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PageHeader({
+  eyebrow,
+  title,
+  description,
+  actions,
+  sectionNav,
+}: {
+  eyebrow: string;
+  title: string;
+  description?: string;
+  actions?: ReactNode;
+  sectionNav?: ReactNode;
+}) {
+  return (
+    <header className={`page-header ${sectionNav ? "with-section-nav" : ""}`}>
+      <div className="page-header-main">
+        <div>
+          <div className="eyebrow">{eyebrow}</div>
+          <h1>{title}</h1>
+          {description && <p>{description}</p>}
+        </div>
+        {actions && <div className="page-actions">{actions}</div>}
+      </div>
+      {sectionNav}
+    </header>
+  );
+}
+
+function Metric({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon?: ReactNode;
+  label: string;
+  value: string;
+  tone?: "green" | "amber";
+}) {
+  return (
+    <div className={`metric ${tone ?? ""}`}>
+      {icon && <span>{icon}</span>}
+      <div>
+        <small>{label}</small>
+        <strong>{value}</strong>
+      </div>
+    </div>
+  );
+}
