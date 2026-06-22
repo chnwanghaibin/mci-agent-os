@@ -4088,26 +4088,28 @@ function AgentDetailPage({
           </div>
         </section>
 
-        <section className={paneClass("detail-training", "panel")}>
+        <section className={paneClass("detail-training", "panel span-2 trace-evaluation-panel")}>
           <div className="section-title">
             <Activity size={16} />
             追踪评估
           </div>
-          <div className="trace-list">
-            {agent.trace.map((item, index) => (
-              <div className="trace-item" key={item}>
-                <span>{index + 1}</span>
-                {item}
-              </div>
-            ))}
-          </div>
-          <div className="doc-snippet">
-            <strong>关联知识片段</strong>
-            <p>{linkedDocs[0]?.snippet ?? "尚未关联知识库文档。"}</p>
+          <div className="trace-evaluation-layout">
+            <div className="trace-list">
+              {agent.trace.map((item, index) => (
+                <div className="trace-item" key={item}>
+                  <span>{index + 1}</span>
+                  {item}
+                </div>
+              ))}
+            </div>
+            <div className="doc-snippet">
+              <strong>关联知识片段</strong>
+              <p>{linkedDocs[0]?.snippet ?? "尚未关联知识库文档。"}</p>
+            </div>
           </div>
         </section>
 
-        <section className={paneClass("detail-training", "panel")}>
+        <section className={paneClass("detail-training", "panel span-2 timeline-panel")}>
           <div className="section-title">
             <RefreshCw size={16} />
             版本时间线

@@ -3017,9 +3017,27 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.trace-evaluation-panel,
+.timeline-panel {
+  display: grid;
+  gap: var(--gap-card);
+}
+
+.trace-evaluation-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.65fr);
+  gap: var(--gap-page);
+  align-items: stretch;
+}
+
 .trace-list {
   display: grid;
   gap: 10px;
+}
+
+.trace-evaluation-panel .trace-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
 }
 
 .trace-item {
@@ -3027,9 +3045,17 @@ textarea:focus {
   align-items: center;
   gap: 9px;
   min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: #fbfcfd;
+  padding: 9px 11px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .trace-item span {
+  flex: 0 0 auto;
   width: 24px;
   height: 24px;
   display: grid;
@@ -3049,6 +3075,15 @@ textarea:focus {
   background: var(--surface-soft);
 }
 
+.trace-evaluation-panel .doc-snippet {
+  margin-top: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100%;
+  padding: var(--pad-card);
+}
+
 .doc-snippet p {
   margin: 7px 0 0;
   color: var(--muted);
@@ -3065,14 +3100,36 @@ textarea:focus {
   padding-left: 10px;
 }
 
+.timeline-panel .timeline-item {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 10px 18px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--green);
+  border-radius: var(--radius-card);
+  background: #fbfcfd;
+  padding: 14px 16px;
+}
+
 .timeline-item span {
   color: var(--muted);
   font-size: 12px;
 }
 
+.timeline-panel .timeline-item > span {
+  grid-row: 1 / span 4;
+  padding-top: 2px;
+  font-weight: 760;
+}
+
 .timeline-item strong {
   display: block;
   margin: 3px 0;
+}
+
+.timeline-panel .timeline-item > strong {
+  margin: 0;
+  font-size: 15px;
 }
 
 .timeline-item p {
@@ -3086,6 +3143,10 @@ textarea:focus {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: 10px;
+}
+
+.timeline-panel .timeline-metric-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .timeline-metric {
@@ -3409,5 +3470,24 @@ textarea:focus {
 
   .span-2 {
     grid-column: span 1;
+  }
+}
+
+@media (max-width: 920px) {
+  .trace-evaluation-layout,
+  .trace-evaluation-panel .trace-list {
+    grid-template-columns: 1fr;
+  }
+
+  .timeline-panel .timeline-item {
+    grid-template-columns: 1fr;
+  }
+
+  .timeline-panel .timeline-item > span {
+    grid-row: auto;
+  }
+
+  .timeline-panel .timeline-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
