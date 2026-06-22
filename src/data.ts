@@ -1,5 +1,6 @@
 import type { Agent, ApiKeyRecord, AppState, EvalRun, FlowItem, KnowledgeDoc, RuleLibraryItem, ToolAsset } from "./types";
 
+
 export const functionalFlows: FlowItem[] = [
   { id: "rwc", label: "1 RWC" },
   { id: "cop", label: "2. COP" },
@@ -318,6 +319,8 @@ const mainAgents: Agent[] = [
         input: "合同允许平台在无通知期情况下提前终止门店收益合约。",
         expected: "识别高风险，要求补充通知期、触发条件和人工复核。",
         status: "通过",
+        judgment: "pass" as const,
+        split: "train" as const,
       },
       {
         id: "tc-contract-2",
@@ -325,6 +328,8 @@ const mainAgents: Agent[] = [
         input: "合同只写明按月分配收益，未说明扣除项和计算口径。",
         expected: "命中收益分配规则，给出补充扣除项和计算口径建议。",
         status: "通过",
+        judgment: "pass" as const,
+        split: "holdout" as const,
       },
       {
         id: "tc-contract-3",
@@ -332,7 +337,33 @@ const mainAgents: Agent[] = [
         input: "门店授权采集日流水，但披露材料使用周度汇总口径。",
         expected: "提示披露口径与授权范围不一致，需要修订。",
         status: "需优化",
+        judgment: "fail" as const,
+        judgmentNote: "Agent 没识别出口径不一致，只提示了泛化风险，缺少具体修订建议。",
+        split: "train" as const,
       },
+    ],
+    instructionSegments: [
+      { id: "seg-c-role", label: "角色" as const, content: "你是滴灌通合同审查 Agent。" },
+      { id: "seg-c-task", label: "任务" as const, content: "请围绕门店现金流合约、收益分配、披露义务、提前终止、争议解决和投资者保护条款进行审查。" },
+      { id: "seg-c-constraint", label: "约束" as const, content: "遇到高风险或证据不足时，必须建议人工复核。不得生成未经验证的法律结论。" },
+      { id: "seg-c-output", label: "输出格式" as const, content: "输出必须包含风险等级、命中规则、修改建议和最终结论。" },
+    ],
+    fewShots: [
+      {
+        id: "fs-c-1",
+        input: "合同允许平台在无通知期情况下提前终止门店收益合约。",
+        output: "【风险等级】高\n【命中规则】提前终止需设复核条件\n【修改建议】补充通知期（不少于 30 天）、触发条件和投资者保护安排\n【结论】需要人工复核，建议在补充保护条款后通过",
+      },
+    ],
+    retrievalConfig: {
+      topK: 4,
+      tagFilters: ["Contract Registrar", "收益分配"],
+    },
+    rubric: [
+      { id: "rub-c-1", dimension: "风险识别完整性", weight: 40, guide: "识别出合同中所有高中风险条款，不遗漏收益分配、终止、披露三类核心条款" },
+      { id: "rub-c-2", dimension: "口径/条款一致性", weight: 30, guide: "检查数据授权范围、收益口径、披露材料三者之间的一致性" },
+      { id: "rub-c-3", dimension: "修订建议可执行性", weight: 20, guide: "建议具体到可落地的修改动作，不只说\"存在风险\"" },
+      { id: "rub-c-4", dimension: "表述清晰", weight: 10, guide: "报告结构清晰，风险等级、命中规则、建议和结论分层明确" },
     ],
   },
   {
@@ -401,6 +432,8 @@ const mainAgents: Agent[] = [
         input: "12 家门店今日现金流未同步，结算页面状态卡在待确认。",
         expected: "分类为 COP 数据同步异常，优先级 P1，路由数据平台和结算支持。",
         status: "通过",
+        judgment: "pass" as const,
+        split: "train" as const,
       },
       {
         id: "tc-system-2",
@@ -408,6 +441,8 @@ const mainAgents: Agent[] = [
         input: "单个门店用户无法进入 COP 查看收益报表。",
         expected: "分类为账户权限问题，优先级 P3，路由平台支持。",
         status: "通过",
+        judgment: "pass" as const,
+        split: "holdout" as const,
       },
       {
         id: "tc-system-3",
@@ -415,10 +450,36 @@ const mainAgents: Agent[] = [
         input: "运营反馈多门店页面异常，但未提供截图和门店清单。",
         expected: "要求补充关键字段后再分诊。",
         status: "待验证",
+        judgment: null,
+        split: "train" as const,
       },
+    ],
+    instructionSegments: [
+      { id: "seg-s-role", label: "角色" as const, content: "你是系统工单分诊 Agent。" },
+      { id: "seg-s-task", label: "任务" as const, content: "请读取工单描述，判断问题类型、优先级、责任团队和下一步动作。优先考虑现金流数据同步、COP 操作阻塞、结算影响和门店范围。" },
+      { id: "seg-s-constraint", label: "约束" as const, content: "P0/P1 工单必须提示人工确认。不得直接承诺修复时间。责任团队必须来自已配置团队。" },
+      { id: "seg-s-output", label: "输出格式" as const, content: "输出分类、优先级（P0-P3）、责任团队和处理摘要。" },
+    ],
+    fewShots: [
+      {
+        id: "fs-s-1",
+        input: "12 家门店今日现金流未同步，结算页面状态卡在待确认。",
+        output: "【分类】COP 数据同步异常\n【优先级】P1（影响结算状态确认）\n【责任方】数据平台主责，结算支持协同\n【摘要】多门店批量数据同步异常，已影响当日结算，需立即升级处理",
+      },
+    ],
+    retrievalConfig: {
+      topK: 3,
+      tagFilters: ["COP", "System Flow"],
+    },
+    rubric: [
+      { id: "rub-s-1", dimension: "分类准确性", weight: 35, guide: "准确识别 COP 数据同步、账户权限、结算异常等问题类型" },
+      { id: "rub-s-2", dimension: "优先级判断", weight: 35, guide: "结合结算影响、门店范围、阻塞程度给出正确的 P0-P3 级别" },
+      { id: "rub-s-3", dimension: "责任方路由", weight: 20, guide: "正确推荐处理团队，P1 及以上需标注人工确认" },
+      { id: "rub-s-4", dimension: "摘要可转派", weight: 10, guide: "摘要应简洁可读，可直接用于工单转派" },
     ],
   },
 ];
+
 
 const shallowPlacements = [
   ["rwc-monitor", "RWC 现金流校验 Agent", "现金流校验", "origination", "rwc", "published"],

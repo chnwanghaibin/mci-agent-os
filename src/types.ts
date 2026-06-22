@@ -73,6 +73,9 @@ export interface TestCase {
   input: string;
   expected: string;
   status: "通过" | "待验证" | "需优化";
+  judgment?: "pass" | "fail" | null;
+  judgmentNote?: string;
+  split?: "train" | "holdout";
 }
 
 export interface ToolAsset {
@@ -113,6 +116,52 @@ export interface TrainingReport {
   meta: Array<{ label: string; value: string }>;
 }
 
+// ── Whitebox trainable units ──────────────────────────────────────────────────
+
+export interface InstructionSegment {
+  id: string;
+  label: "角色" | "任务" | "约束" | "输出格式";
+  content: string;
+}
+
+export interface FewShotExample {
+  id: string;
+  input: string;
+  output: string;
+}
+
+export interface RetrievalConfig {
+  topK: number;
+  tagFilters: string[];
+}
+
+export interface RubricCriterion {
+  id: string;
+  dimension: string;
+  weight: number;
+  guide: string;
+}
+
+// ── Proposal (training diff card) ─────────────────────────────────────────────
+
+export type ProposalStatus = "pending" | "accepted" | "edited" | "rejected";
+export type ProposalTargetUnit = "few-shot" | "rule" | "retrieval" | "instruction" | "parameter";
+
+export interface Proposal {
+  id: string;
+  unit: ProposalTargetUnit;
+  unitLabel: string;
+  before: string;
+  after: string;
+  reason: string;
+  triggerCase: string;
+  status: ProposalStatus;
+  editedContent?: string;
+  riskFlag?: boolean;
+}
+
+// ── Agent ─────────────────────────────────────────────────────────────────────
+
 export interface Agent {
   id: string;
   name: string;
@@ -142,6 +191,11 @@ export interface Agent {
   apiCalls: ApiCall[];
   testCases: TestCase[];
   shallow?: boolean;
+  // Whitebox trainable units
+  instructionSegments?: InstructionSegment[];
+  fewShots?: FewShotExample[];
+  retrievalConfig?: RetrievalConfig;
+  rubric?: RubricCriterion[];
 }
 
 export interface AppState {

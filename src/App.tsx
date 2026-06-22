@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Bot,
@@ -7,8 +8,10 @@ import {
   Code2,
   Copy,
   Database,
+  Edit3,
   FileText,
   Filter,
+  GitCompare,
   Grid3X3,
   Layers3,
   PlayCircle,
@@ -23,6 +26,8 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
   Upload,
   Wrench,
@@ -30,7 +35,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { cellKey, defaultState, functionalFlows, workFlows } from "./data";
-import type { Agent, AgentStatus, ApiKeyRecord, AppState, EvalRun, KnowledgeDoc, RuleItem, RuleLibraryItem, ToolAsset, ViewName } from "./types";
+import type { Agent, AgentStatus, ApiKeyRecord, AppState, EvalRun, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RubricCriterion, RuleItem, RuleLibraryItem, ToolAsset, ViewName } from "./types";
 
 const STORAGE_KEY = "dgt-agent-platform-demo";
 
@@ -126,6 +131,20 @@ type TrainingRunState = {
   startedAt: string;
   completed: boolean;
   result: TrainingRunResult;
+  proposals: Proposal[];
+};
+
+type ProposalReviewState = {
+  agentId: string;
+  proposals: Proposal[];
+  phase: "review" | "gating" | "done";
+  gateResult: {
+    passed: boolean;
+    trainDelta: number;
+    holdoutDelta: number;
+    autoRejectedIds: string[];
+  } | null;
+  trainingResult: TrainingRunResult;
 };
 
 type EvaluationRunResult = {
@@ -397,6 +416,10 @@ function migrateState(partial: Partial<AppState>): AppState {
       })),
       apiCalls: agent.apiCalls ?? defaultAgentsById[agent.id]?.apiCalls ?? [],
       testCases: agent.testCases ?? defaultAgentsById[agent.id]?.testCases ?? [],
+      instructionSegments: agent.instructionSegments ?? defaultAgentsById[agent.id]?.instructionSegments,
+      fewShots: agent.fewShots ?? defaultAgentsById[agent.id]?.fewShots,
+      retrievalConfig: agent.retrievalConfig ?? defaultAgentsById[agent.id]?.retrievalConfig,
+      rubric: agent.rubric ?? defaultAgentsById[agent.id]?.rubric,
     })),
     docs: partial.docs ?? defaultState.docs,
     rules: mergedRules,
@@ -658,6 +681,71 @@ function buildEvaluationRunResult(agent: Agent): EvaluationRunResult {
   };
 }
 
+function buildMockProposals(agent: Agent): Proposal[] {
+  const failedCase = agent.testCases.find((c) => c.status !== "通过");
+  const currentTopK = agent.retrievalConfig?.topK ?? 4;
+  const ts = Date.now();
+  const isContract = /(合同|合规|contract)/i.test(`${agent.name} ${agent.type}`);
+  const proposals: Proposal[] = [];
+
+  if (failedCase) {
+    proposals.push({
+      id: `p-fs-${ts}`,
+      unit: "few-shot",
+      unitLabel: "Few-shot 示范",
+      before: "（当前无该场景示例）",
+      after: `输入：${failedCase.input.slice(0, 72)}\n期望输出：${failedCase.expected.slice(0, 60)}`,
+      reason: `"${failedCase.name}"场景下 Agent 输出不稳定，补充示范例子可固化该场景的正确输出模式，避免下次遗漏。`,
+      triggerCase: failedCase.name,
+      status: "pending",
+      riskFlag: false,
+    });
+  }
+
+  proposals.push({
+    id: `p-rule-${ts + 1}`,
+    unit: "rule",
+    unitLabel: "规则绑定",
+    before: "（相关规则未覆盖该判断边界）",
+    after: isContract
+      ? "新增规则：数据授权范围与披露口径需一致，优先级高，分类合规"
+      : "新增规则：批量门店异常需升级处理并说明责任方，优先级高",
+    reason: `失败用例中发现当前规则集未覆盖该判断边界，补充后可提升规则命中率。`,
+    triggerCase: failedCase?.name ?? "边界判断未覆盖",
+    status: "pending",
+    riskFlag: false,
+  });
+
+  proposals.push({
+    id: `p-ret-${ts + 2}`,
+    unit: "retrieval",
+    unitLabel: "检索配置",
+    before: `top_k = ${currentTopK}，标签过滤：${agent.retrievalConfig?.tagFilters?.join("、") ?? "当前配置"}`,
+    after: `top_k = ${currentTopK + 2}，标签过滤：补充"${isContract ? "数据授权、披露口径" : "批量异常、结算影响"}"`,
+    reason: "相关知识片段召回不足，增大 top_k 并补充标签过滤可提升知识命中率。",
+    triggerCase: failedCase?.name ?? "知识检索未命中",
+    status: "pending",
+    riskFlag: false,
+  });
+
+  if (agent.score < 85) {
+    const taskSeg = agent.instructionSegments?.find((s) => s.label === "任务");
+    proposals.push({
+      id: `p-inst-${ts + 3}`,
+      unit: "instruction",
+      unitLabel: "指令分段（任务段）",
+      before: taskSeg ? taskSeg.content.slice(0, 80) + (taskSeg.content.length > 80 ? "…" : "") : "（当前任务段）",
+      after: (taskSeg?.content ?? "当前任务描述") + `\n同时，必须比对${isContract ? "数据授权范围与披露材料口径是否一致" : "影响门店范围与报告口径是否统一"}，不一致时标注为高风险。`,
+      reason: "当前任务指令未明确要求该关键检查项，失败用例中该场景被遗漏。",
+      triggerCase: failedCase?.name ?? "关键检查遗漏",
+      status: "pending",
+      riskFlag: false,
+    });
+  }
+
+  return proposals;
+}
+
 function makeNewAgent(name: string, purpose: string, type: string, inputSchema?: string[], outputSchema?: string[]): Agent {
   const blueprint = inferAgentBlueprint(name, type, purpose);
   return {
@@ -687,6 +775,10 @@ function makeNewAgent(name: string, purpose: string, type: string, inputSchema?:
     ],
     apiCalls: [],
     testCases: blueprint.testCases.map((testCase) => ({ ...testCase, id: `${testCase.id}-${Date.now()}` })),
+    instructionSegments: [],
+    fewShots: [],
+    retrievalConfig: { topK: 4, tagFilters: [] },
+    rubric: [],
   };
 }
 
@@ -704,6 +796,7 @@ export default function App() {
   const [evaluationRun, setEvaluationRun] = useState<EvaluationRunState | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [proposalReview, setProposalReview] = useState<ProposalReviewState | null>(null);
 
   const notify = (message: string) => {
     setNotice(message);
@@ -748,7 +841,7 @@ export default function App() {
     setSelectedCellKey(key);
   };
 
-  const completeTraining = (agentId: string, result: TrainingRunResult) => {
+  const completeTraining = (agentId: string, result: TrainingRunResult, appliedLabels?: string[]) => {
     setState((current) => {
       const target = current.agents.find((agent) => agent.id === agentId);
       if (!target) return current;
@@ -771,7 +864,7 @@ export default function App() {
                   {
                     id: `train-${result.runId}`,
                     title: `训练运行报告 ${result.versionAfter}`,
-                    description: `完成 ${trainingSteps.length} 个训练阶段，质量分 ${result.scoreBefore} -> ${result.scoreAfter}（${result.delta >= 0 ? "+" : ""}${result.delta}），通过率 ${result.passRate}%，置信度 ${result.confidence}%。`,
+                    description: `完成 ${trainingSteps.length} 个训练阶段，质量分 ${result.scoreBefore} -> ${result.scoreAfter}（${result.delta >= 0 ? "+" : ""}${result.delta}），通过率 ${result.passRate}%，置信度 ${result.confidence}%。${appliedLabels?.length ? ` 已应用改动：${appliedLabels.join("、")}。` : ""}`,
                     time: nowLabel(),
                     version: result.versionAfter,
                     metrics: [
@@ -806,7 +899,7 @@ export default function App() {
         ],
       };
     });
-    setTrainingRun((current) => (current?.agentId === agentId ? { ...current, completed: true, result } : current));
+    setTrainingRun(null);
     notify("训练完成，版本报告和评估记录已生成");
   };
 
@@ -818,6 +911,7 @@ export default function App() {
     const target = agentsById[agentId];
     if (!target) return;
     const result = buildTrainingRunResult(target);
+    const proposals = buildMockProposals(target);
     setTrainingAgentId(agentId);
     setTrainingStep(0);
     setTrainingRun({
@@ -825,18 +919,104 @@ export default function App() {
       startedAt: nowLabel(),
       completed: false,
       result,
+      proposals,
     });
     trainingSteps.forEach((_, index) => {
       window.setTimeout(() => {
         setTrainingStep(index);
         if (index === trainingSteps.length - 1) {
           window.setTimeout(() => {
-            completeTraining(agentId, result);
-            setTrainingAgentId(null);
+            // Mark complete but do NOT upgrade version yet — wait for proposal review
+            setTrainingRun((current) =>
+              current?.agentId === agentId ? { ...current, completed: true } : current,
+            );
           }, 520);
         }
       }, index * 780);
     });
+  };
+
+  const openProposalReview = () => {
+    if (!trainingRun?.completed) return;
+    setProposalReview({
+      agentId: trainingRun.agentId,
+      proposals: trainingRun.proposals,
+      phase: "review",
+      gateResult: null,
+      trainingResult: trainingRun.result,
+    });
+    setTrainingRun(null);
+    setTrainingAgentId(null);
+  };
+
+  const updateProposal = (proposalId: string, patch: Partial<Proposal>) => {
+    setProposalReview((current) =>
+      current
+        ? {
+            ...current,
+            proposals: current.proposals.map((p) => (p.id === proposalId ? { ...p, ...patch } : p)),
+          }
+        : null,
+    );
+  };
+
+  const submitProposalReview = () => {
+    if (!proposalReview) return;
+    const accepted = proposalReview.proposals.filter((p) => p.status === "accepted" || p.status === "edited");
+    const rejected = proposalReview.proposals.filter((p) => p.status === "rejected");
+    setProposalReview((current) => current ? { ...current, phase: "gating" } : null);
+
+    window.setTimeout(() => {
+      const trainDelta = accepted.length * 4 - rejected.length;
+      const holdoutDelta = accepted.length * 3;
+      const autoRejectedIds: string[] = [];
+      setProposalReview((current) =>
+        current
+          ? {
+              ...current,
+              phase: "done",
+              gateResult: {
+                passed: trainDelta > 0 && holdoutDelta >= 0,
+                trainDelta,
+                holdoutDelta,
+                autoRejectedIds,
+              },
+            }
+          : null,
+      );
+    }, 2200);
+  };
+
+  const finalizeTraining = () => {
+    if (!proposalReview) return;
+    const { agentId, trainingResult, proposals } = proposalReview;
+    const accepted = proposals.filter((p) => p.status === "accepted" || p.status === "edited");
+
+    // Apply accepted few-shot proposals to the agent
+    const newFewShots: FewShotExample[] = accepted
+      .filter((p) => p.unit === "few-shot")
+      .map((p) => ({
+        id: `fs-applied-${p.id}`,
+        input: p.triggerCase,
+        output: p.editedContent ?? p.after,
+      }));
+
+    // Apply accepted retrieval config proposals
+    const retProposal = accepted.find((p) => p.unit === "retrieval");
+    const newTopK = retProposal ? (agentsById[agentId]?.retrievalConfig?.topK ?? 4) + 2 : undefined;
+
+    if (newFewShots.length > 0 || newTopK !== undefined) {
+      updateAgent(agentId, (agent) => ({
+        ...agent,
+        fewShots: [...(agent.fewShots ?? []), ...newFewShots],
+        retrievalConfig: newTopK !== undefined
+          ? { ...agent.retrievalConfig, topK: newTopK, tagFilters: agent.retrievalConfig?.tagFilters ?? [] }
+          : agent.retrievalConfig,
+      }));
+    }
+
+    completeTraining(agentId, trainingResult, accepted.map((p) => p.unitLabel));
+    setProposalReview(null);
   };
 
   const submitFeedback = (agentId: string, score: number, note: string) => {
@@ -1556,7 +1736,18 @@ export default function App() {
           agent={trainingRunAgent}
           run={trainingRun}
           trainingStep={trainingStep}
-          onClose={() => setTrainingRun(null)}
+          onClose={() => { setTrainingRun(null); setTrainingAgentId(null); }}
+          onEnterReview={openProposalReview}
+        />
+      )}
+      {proposalReview && (
+        <ProposalReviewModal
+          agent={agentsById[proposalReview.agentId]}
+          review={proposalReview}
+          onUpdateProposal={updateProposal}
+          onSubmit={submitProposalReview}
+          onFinalize={finalizeTraining}
+          onClose={() => setProposalReview(null)}
         />
       )}
       {evaluationRun && evaluationRunAgent && (
@@ -1576,11 +1767,13 @@ function TrainingRunModal({
   run,
   trainingStep,
   onClose,
+  onEnterReview,
 }: {
   agent: Agent;
   run: TrainingRunState;
   trainingStep: number;
   onClose: () => void;
+  onEnterReview: () => void;
 }) {
   const activeIndex = run.completed ? trainingSteps.length - 1 : Math.min(trainingStep, trainingSteps.length - 1);
   const progress = run.completed ? 100 : Math.round(((activeIndex + 1) / trainingSteps.length) * 100);
@@ -1716,11 +1909,21 @@ function TrainingRunModal({
         </div>
 
         <div className={`training-modal-footer ${run.completed ? "complete" : ""}`}>
-          <span>{run.completed ? "训练报告、评估记录和详细步骤已写入版本时间线。" : `开始时间 ${run.startedAt}，正在采集训练指标。`}</span>
+          <span>
+            {run.completed
+              ? `系统生成了 ${run.proposals.length} 条改动建议，请进入审查闸门逐条确认。`
+              : `开始时间 ${run.startedAt}，正在采集训练指标。`}
+          </span>
           {run.completed && (
-            <button className="primary-button" type="button" onClick={onClose}>
-              关闭
-            </button>
+            <div className="training-footer-actions">
+              <button className="ghost-button" type="button" onClick={onClose}>
+                跳过审查
+              </button>
+              <button className="primary-button" type="button" onClick={onEnterReview}>
+                <GitCompare size={16} />
+                进入审查闸门 ({run.proposals.length} 条)
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -1877,6 +2080,254 @@ function EvaluationRunModal({
             <button className="primary-button" type="button" onClick={onClose}>
               关闭
             </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const unitColors: Record<string, string> = {
+  "few-shot": "pill-fewshot",
+  rule: "pill-rule",
+  retrieval: "pill-retrieval",
+  instruction: "pill-instruction",
+  parameter: "pill-parameter",
+};
+
+function ProposalReviewModal({
+  agent,
+  review,
+  onUpdateProposal,
+  onSubmit,
+  onFinalize,
+  onClose,
+}: {
+  agent: Agent;
+  review: ProposalReviewState;
+  onUpdateProposal: (id: string, patch: Partial<Proposal>) => void;
+  onSubmit: () => void;
+  onFinalize: () => void;
+  onClose: () => void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+
+  const pendingCount = review.proposals.filter((p) => p.status === "pending").length;
+  const acceptedCount = review.proposals.filter((p) => p.status === "accepted" || p.status === "edited").length;
+  const rejectedCount = review.proposals.filter((p) => p.status === "rejected").length;
+  const allDecided = pendingCount === 0;
+
+  const startEdit = (proposal: Proposal) => {
+    setEditingId(proposal.id);
+    setEditDraft(proposal.editedContent ?? proposal.after);
+  };
+
+  const saveEdit = (id: string) => {
+    onUpdateProposal(id, { status: "edited", editedContent: editDraft });
+    setEditingId(null);
+  };
+
+  const cancelEdit = () => setEditingId(null);
+
+  return (
+    <div className="training-modal-backdrop proposal-backdrop" role="dialog" aria-modal="true" aria-label="审查改动建议">
+      <div className="training-modal proposal-modal">
+        <div className="training-modal-hero">
+          <button
+            className="icon-button training-modal-close"
+            type="button"
+            onClick={onClose}
+            disabled={review.phase === "gating"}
+            aria-label="关闭"
+          >
+            <X size={17} />
+          </button>
+          <div>
+            <div className="eyebrow">Human Review Gate</div>
+            <h2>
+              {review.phase === "review" && "审查 Agent 改动建议"}
+              {review.phase === "gating" && "回归守门中…"}
+              {review.phase === "done" && (review.gateResult?.passed ? "守门通过，可升版" : "守门未通过")}
+            </h2>
+            <p>
+              {review.phase === "review" &&
+                `系统根据失败用例分析生成了 ${review.proposals.length} 条改动建议。请逐条审查，这是本轮训练唯一需要你动手的地方。`}
+              {review.phase === "gating" &&
+                "正在对候选版本跑训练集和留出集，验证改动没有引起回归退步…"}
+              {review.phase === "done" &&
+                (review.gateResult?.passed
+                  ? `训练集 +${review.gateResult.trainDelta}，留出集 +${review.gateResult.holdoutDelta}，守门通过，可提交升版。`
+                  : "留出集得分下降，部分改动已被自动剔除，请重新审查。")}
+            </p>
+          </div>
+          <div className="training-modal-status">
+            <span>{review.phase === "review" ? "Review" : review.phase === "gating" ? "Gating" : review.gateResult?.passed ? "Passed" : "Failed"}</span>
+            <strong>
+              {review.phase === "review"
+                ? `${acceptedCount + rejectedCount}/${review.proposals.length}`
+                : review.phase === "gating"
+                ? "…"
+                : review.gateResult?.passed
+                ? "✓"
+                : "✗"}
+            </strong>
+            <small>
+              {review.phase === "review" ? (allDecided ? "全部审查完毕" : `待审查 ${pendingCount} 条`) : review.phase === "gating" ? "守门中" : "守门完成"}
+            </small>
+          </div>
+        </div>
+
+        {review.phase === "gating" && (
+          <div className="proposal-gating-bar">
+            <div className="proposal-gating-progress" />
+            <p>在 train 集和 holdout 集上重跑候选版本，验证训练集提升且留出集未退步…</p>
+          </div>
+        )}
+
+        {review.phase !== "gating" && (
+          <div className="proposal-list">
+            {review.proposals.map((proposal) => {
+              const isEditing = editingId === proposal.id;
+              const isAutoRejected = review.gateResult?.autoRejectedIds.includes(proposal.id);
+              return (
+                <div
+                  className={`proposal-card ${proposal.status !== "pending" ? `proposal-${proposal.status}` : ""} ${isAutoRejected ? "proposal-auto-rejected" : ""}`}
+                  key={proposal.id}
+                >
+                  <div className="proposal-card-header">
+                    <span className={`proposal-unit-pill ${unitColors[proposal.unit] ?? ""}`}>{proposal.unitLabel}</span>
+                    {proposal.riskFlag && (
+                      <span className="proposal-risk-flag">
+                        <AlertTriangle size={13} />
+                        过拟合风险
+                      </span>
+                    )}
+                    {isAutoRejected && <span className="proposal-risk-flag">⚙ 守门自动剔除</span>}
+                    {proposal.status !== "pending" && !isAutoRejected && (
+                      <span className={`proposal-decision-badge proposal-decision-${proposal.status}`}>
+                        {proposal.status === "accepted" ? "✓ 已接受" : proposal.status === "edited" ? "✎ 已编辑" : "✗ 已拒绝"}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="proposal-diff">
+                    <div className="proposal-diff-before">
+                      <span>改前</span>
+                      <p>{proposal.before}</p>
+                    </div>
+                    <div className="proposal-diff-arrow">→</div>
+                    <div className="proposal-diff-after">
+                      <span>改后</span>
+                      {isEditing ? (
+                        <textarea
+                          className="proposal-edit-textarea"
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          rows={3}
+                          autoFocus
+                        />
+                      ) : (
+                        <p>{proposal.editedContent ?? proposal.after}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="proposal-meta">
+                    <div className="proposal-reason">
+                      <span>诊断原因</span>
+                      <p>{proposal.reason}</p>
+                    </div>
+                    <div className="proposal-trigger">
+                      <span>触发用例</span>
+                      <strong>{proposal.triggerCase}</strong>
+                    </div>
+                  </div>
+
+                  {review.phase === "review" && (
+                    <div className="proposal-actions">
+                      {isEditing ? (
+                        <>
+                          <button className="proposal-btn-accept" type="button" onClick={() => saveEdit(proposal.id)}>
+                            <Save size={13} />
+                            保存编辑
+                          </button>
+                          <button className="proposal-btn-reject" type="button" onClick={cancelEdit}>
+                            取消
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            className={`proposal-btn-accept ${proposal.status === "accepted" ? "active" : ""}`}
+                            type="button"
+                            onClick={() => onUpdateProposal(proposal.id, { status: "accepted" })}
+                          >
+                            <ThumbsUp size={13} />
+                            接受
+                          </button>
+                          <button
+                            className={`proposal-btn-edit ${proposal.status === "edited" ? "active" : ""}`}
+                            type="button"
+                            onClick={() => startEdit(proposal)}
+                          >
+                            <Edit3 size={13} />
+                            编辑后接受
+                          </button>
+                          <button
+                            className={`proposal-btn-reject ${proposal.status === "rejected" ? "active" : ""}`}
+                            type="button"
+                            onClick={() => onUpdateProposal(proposal.id, { status: "rejected" })}
+                          >
+                            <ThumbsDown size={13} />
+                            拒绝
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className={`training-modal-footer ${review.phase !== "review" ? "complete" : ""}`}>
+          {review.phase === "review" && (
+            <>
+              <span>
+                {allDecided
+                  ? `已审查全部 ${review.proposals.length} 条改动（接受 ${acceptedCount} 条，拒绝 ${rejectedCount} 条）。`
+                  : `还有 ${pendingCount} 条未审查，全部决定后可提交。`}
+              </span>
+              <button className="primary-button" type="button" onClick={onSubmit} disabled={!allDecided || acceptedCount === 0}>
+                <ShieldCheck size={16} />
+                提交审查 · 运行回归守门
+              </button>
+            </>
+          )}
+          {review.phase === "gating" && (
+            <span>正在跑训练集与留出集，请稍候…</span>
+          )}
+          {review.phase === "done" && review.gateResult && (
+            <>
+              <span>
+                训练集质量分 {review.trainingResult.scoreBefore}→+{review.gateResult.trainDelta}，
+                留出集 {review.gateResult.holdoutDelta >= 0 ? `+${review.gateResult.holdoutDelta}` : review.gateResult.holdoutDelta}，
+                {review.gateResult.passed ? "守门通过。" : "留出集未提升，部分改动已自动剔除。"}
+              </span>
+              <div className="training-footer-actions">
+                <button className="ghost-button" type="button" onClick={onClose}>
+                  放弃本轮
+                </button>
+                {review.gateResult.passed && (
+                  <button className="primary-button" type="button" onClick={onFinalize}>
+                    <Rocket size={16} />
+                    升版提交 ({review.trainingResult.versionBefore} → {review.trainingResult.versionAfter})
+                  </button>
+                )}
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -3334,7 +3785,7 @@ function AgentDetailPage({
   ];
   const detailSections = [
     { id: "detail-overview", label: "概览", summary: `${readinessScore} 分预检` },
-    { id: "detail-prompt", label: "Prompt 编辑器", summary: "角色与输出" },
+    { id: "detail-prompt", label: "白盒配置单元", summary: `${agent.instructionSegments?.length ?? 0} 段 / ${agent.fewShots?.length ?? 0} 示范` },
     { id: "detail-tools", label: "工具与边界", summary: `${enabledTools} 工具 / ${agent.guardrails.length} 边界` },
     { id: "detail-workflow", label: "工作流管理", summary: `${agent.workflow.filter((step) => step.enabled).length} 个步骤` },
     { id: "detail-assets", label: "知识与规则", summary: `${agent.knowledgeIds.length} 文档 / ${enabledRules} 规则` },
@@ -3426,6 +3877,63 @@ function AgentDetailPage({
       workflow: item.workflow.filter((step) => step.id !== stepId),
     }));
     onNotify("工作流步骤已删除");
+  };
+
+  const addFewShot = () => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      fewShots: [
+        ...(item.fewShots ?? []),
+        { id: `fs-${Date.now()}`, input: "填写一条标准输入示例。", output: "填写对应的期望输出。" },
+      ],
+    }));
+    onNotify("Few-shot 示范已新增");
+  };
+
+  const deleteFewShot = (fsId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      fewShots: (item.fewShots ?? []).filter((fs) => fs.id !== fsId),
+    }));
+    onNotify("Few-shot 示范已删除");
+  };
+
+  const addInstructionSegment = () => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      instructionSegments: [
+        ...(item.instructionSegments ?? []),
+        { id: `seg-${Date.now()}`, label: "约束" as const, content: "填写新约束条件。" },
+      ],
+    }));
+    onNotify("指令段已新增");
+  };
+
+  const deleteInstructionSegment = (segId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      instructionSegments: (item.instructionSegments ?? []).filter((s) => s.id !== segId),
+    }));
+    onNotify("指令段已删除");
+  };
+
+  const addRubricCriterion = () => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      rubric: [
+        ...(item.rubric ?? []),
+        { id: `rub-${Date.now()}`, dimension: "新增评估维度", weight: 10, guide: "填写该维度的打分指引。" },
+      ],
+    }));
+    onNotify("Rubric 维度已新增");
+  };
+
+  const deleteRubricCriterion = (rubId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      rubric: (item.rubric ?? []).filter((r) => r.id !== rubId),
+    }));
+    onNotify("Rubric 维度已删除");
   };
 
   const addTestCase = () => {
@@ -3592,21 +4100,128 @@ function AgentDetailPage({
         <div className={paneClass("detail-prompt", "detail-block-heading span-2")}>
           <span>02</span>
           <div>
-            <strong>Prompt 编辑器</strong>
-            <p>维护 Agent 的角色、任务边界、输出结构和人工复核要求。</p>
+            <strong>白盒配置单元</strong>
+            <p>Agent 的"大脑"以具名段落呈现，可逐段查看和编辑，训练系统也对这些单元提 diff 建议。</p>
           </div>
         </div>
 
-        <section className={paneClass("detail-prompt", "panel prompt-panel span-2")}>
-          <div className="section-title">
-            <Sparkles size={16} />
-            Prompt 编辑器
+        <section className={paneClass("detail-prompt", "panel prompt-panel span-2 whitebox-panel")}>
+          <div className="section-title with-action">
+            <span>
+              <Layers3 size={16} />
+              指令分段
+            </span>
+            <button className="ghost-button compact" type="button" onClick={addInstructionSegment}>
+              <Plus size={15} />
+              添加段
+            </button>
           </div>
-          <textarea
-            className="prompt-editor"
-            value={agent.prompt}
-            onChange={(event) => onUpdateAgent(agent.id, (item) => ({ ...item, prompt: event.target.value }))}
-          />
+          {(agent.instructionSegments ?? []).length > 0 ? (
+            <div className="instruction-segments">
+              {(agent.instructionSegments ?? []).map((seg) => (
+                <div className="instruction-segment-card" key={seg.id}>
+                  <div className="segment-label-row">
+                    <span className={`segment-label segment-label-${seg.label === "角色" ? "role" : seg.label === "任务" ? "task" : seg.label === "约束" ? "constraint" : "output"}`}>
+                      {seg.label}
+                    </span>
+                    <button className="ghost-button compact danger-button" type="button" onClick={() => deleteInstructionSegment(seg.id)}>
+                      删除
+                    </button>
+                  </div>
+                  <textarea
+                    value={seg.content}
+                    rows={2}
+                    onChange={(e) =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        instructionSegments: (item.instructionSegments ?? []).map((s) =>
+                          s.id === seg.id ? { ...s, content: e.target.value } : s,
+                        ),
+                      }))
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-whitebox">
+              <p>暂无指令分段。系统可在训练审查时自动生成分段建议，或点击上方"添加段"手动创建。</p>
+              <button className="secondary-button" type="button" onClick={() =>
+                onUpdateAgent(agent.id, (item) => ({
+                  ...item,
+                  instructionSegments: [
+                    { id: `seg-r-${Date.now()}`, label: "角色" as const, content: agent.prompt.split("。")[0] + "。" },
+                    { id: `seg-t-${Date.now() + 1}`, label: "任务" as const, content: "请根据业务背景和关联知识库完成核心判断任务。" },
+                    { id: `seg-c-${Date.now() + 2}`, label: "约束" as const, content: agent.guardrails[0] ?? "高风险情况必须建议人工复核。" },
+                    { id: `seg-o-${Date.now() + 3}`, label: "输出格式" as const, content: "输出必须包含结论、命中规则和修改建议。" },
+                  ],
+                }))
+              }>
+                <Sparkles size={15} />
+                自动拆分现有 Prompt
+              </button>
+            </div>
+          )}
+        </section>
+
+        <section className={paneClass("detail-prompt", "panel span-2 fewshot-panel")}>
+          <div className="section-title with-action">
+            <span>
+              <FileText size={16} />
+              Few-shot 示范
+            </span>
+            <button className="ghost-button compact" type="button" onClick={addFewShot}>
+              <Plus size={15} />
+              添加示范
+            </button>
+          </div>
+          <p className="section-hint">这是非技术用户最自然的训练方式——举例子教 Agent。训练系统可从失败用例中自动提 Few-shot 建议。</p>
+          {(agent.fewShots ?? []).length > 0 ? (
+            <div className="fewshot-list">
+              {(agent.fewShots ?? []).map((fs, index) => (
+                <div className="fewshot-card" key={fs.id}>
+                  <div className="fewshot-card-header">
+                    <span className="fewshot-index">示范 {index + 1}</span>
+                    <button className="ghost-button compact danger-button" type="button" onClick={() => deleteFewShot(fs.id)}>
+                      删除
+                    </button>
+                  </div>
+                  <div className="fewshot-io">
+                    <div>
+                      <span>输入</span>
+                      <textarea
+                        value={fs.input}
+                        rows={2}
+                        onChange={(e) =>
+                          onUpdateAgent(agent.id, (item) => ({
+                            ...item,
+                            fewShots: (item.fewShots ?? []).map((f) => (f.id === fs.id ? { ...f, input: e.target.value } : f)),
+                          }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <span>期望输出</span>
+                      <textarea
+                        value={fs.output}
+                        rows={3}
+                        onChange={(e) =>
+                          onUpdateAgent(agent.id, (item) => ({
+                            ...item,
+                            fewShots: (item.fewShots ?? []).map((f) => (f.id === fs.id ? { ...f, output: e.target.value } : f)),
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-whitebox">
+              <p>暂无示范用例。运行训练并在审查闸门中接受 Few-shot 建议，系统会自动从失败用例生成示范。</p>
+            </div>
+          )}
         </section>
 
         <div className={paneClass("detail-tools", "detail-block-heading span-2")}>
@@ -3993,6 +4608,109 @@ function AgentDetailPage({
             <ReportCard report={agent.afterReport} active={agent.trainedOnce} />
           </div>
 
+        </section>
+
+        <section className={paneClass("detail-training", "panel span-2 rubric-panel")}>
+          <div className="section-title with-action">
+            <span>
+              <ShieldCheck size={16} />
+              Rubric 评分标准
+            </span>
+            <button className="ghost-button compact" type="button" onClick={addRubricCriterion}>
+              <Plus size={15} />
+              添加维度
+            </button>
+          </div>
+          <p className="section-hint">Rubric 是评估的唯一标准。Judge 校准前必须先确认 Rubric，用于 LLM 自动打分与人工判断的一致性校验。</p>
+          {(agent.rubric ?? []).length > 0 ? (
+            <div className="rubric-table">
+              <div className="rubric-head">
+                <span>评估维度</span>
+                <span>权重</span>
+                <span>打分指引</span>
+                <span />
+              </div>
+              {(agent.rubric ?? []).map((criterion) => (
+                <div className="rubric-row" key={criterion.id}>
+                  <input
+                    value={criterion.dimension}
+                    onChange={(e) =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        rubric: (item.rubric ?? []).map((r) => (r.id === criterion.id ? { ...r, dimension: e.target.value } : r)),
+                      }))
+                    }
+                  />
+                  <div className="rubric-weight-cell">
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={criterion.weight}
+                      onChange={(e) =>
+                        onUpdateAgent(agent.id, (item) => ({
+                          ...item,
+                          rubric: (item.rubric ?? []).map((r) =>
+                            r.id === criterion.id ? { ...r, weight: Number(e.target.value) } : r,
+                          ),
+                        }))
+                      }
+                    />
+                    <span>%</span>
+                  </div>
+                  <input
+                    value={criterion.guide}
+                    onChange={(e) =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        rubric: (item.rubric ?? []).map((r) => (r.id === criterion.id ? { ...r, guide: e.target.value } : r)),
+                      }))
+                    }
+                  />
+                  <button className="ghost-button compact danger-button" type="button" onClick={() => deleteRubricCriterion(criterion.id)}>
+                    删除
+                  </button>
+                </div>
+              ))}
+              <div className="rubric-total">
+                <span>合计权重</span>
+                <strong
+                  className={(agent.rubric ?? []).reduce((s, r) => s + r.weight, 0) === 100 ? "weight-ok" : "weight-warn"}
+                >
+                  {(agent.rubric ?? []).reduce((s, r) => s + r.weight, 0)}%
+                </strong>
+                {(agent.rubric ?? []).reduce((s, r) => s + r.weight, 0) !== 100 && (
+                  <small>各维度权重之和应为 100%</small>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="empty-whitebox">
+              <p>暂无 Rubric。点击"添加维度"手动定义，或使用"AI 辅助立标准"功能让系统从你的判断中反推。</p>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  onUpdateAgent(agent.id, (item) => ({
+                    ...item,
+                    rubric: [
+                      { id: `rub-${Date.now()}`, dimension: "任务完成度", weight: 40, guide: "正确完成核心业务判断，不遗漏关键项" },
+                      { id: `rub-${Date.now() + 1}`, dimension: "规则命中", weight: 30, guide: "命中所有适用规则，给出可追溯证据" },
+                      { id: `rub-${Date.now() + 2}`, dimension: "建议可执行性", weight: 20, guide: "给出具体可落地的处理建议" },
+                      { id: `rub-${Date.now() + 3}`, dimension: "表述清晰", weight: 10, guide: "输出结构完整，表达清晰易读" },
+                    ],
+                  }));
+                  onNotify("已生成通用 Rubric 模板，可按业务需求调整");
+                }}
+              >
+                <Sparkles size={15} />
+                AI 辅助立标准（模拟）
+              </button>
+            </div>
+          )}
+        </section>
+
+        <section className={paneClass("detail-training", "panel span-2")}>
           <div className="feedback-box studio-feedback">
             <div>
               <div className="section-title small">
@@ -4036,21 +4754,28 @@ function AgentDetailPage({
           <div className="case-grid">
             {agent.testCases.map((testCase) => (
               <div className="case-card editable" key={testCase.id}>
-                <select
-                  value={testCase.status}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      testCases: item.testCases.map((target) =>
-                        target.id === testCase.id ? { ...target, status: event.target.value as "通过" | "待验证" | "需优化" } : target,
-                      ),
-                    }))
-                  }
-                >
-                  <option value="通过">通过</option>
-                  <option value="待验证">待验证</option>
-                  <option value="需优化">需优化</option>
-                </select>
+                <div className="case-card-meta-row">
+                  <select
+                    value={testCase.status}
+                    onChange={(event) =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        testCases: item.testCases.map((target) =>
+                          target.id === testCase.id ? { ...target, status: event.target.value as "通过" | "待验证" | "需优化" } : target,
+                        ),
+                      }))
+                    }
+                  >
+                    <option value="通过">通过</option>
+                    <option value="待验证">待验证</option>
+                    <option value="需优化">需优化</option>
+                  </select>
+                  {testCase.split && (
+                    <span className={`case-split-badge ${testCase.split === "holdout" ? "holdout" : ""}`}>
+                      {testCase.split === "train" ? "训练集" : "留出集"}
+                    </span>
+                  )}
+                </div>
                 <input
                   value={testCase.name}
                   onChange={(event) =>
@@ -4080,6 +4805,57 @@ function AgentDetailPage({
                   }
                   rows={2}
                 />
+                <div className="case-judgment-row">
+                  <span className="case-judgment-label">你的判断</span>
+                  <button
+                    className={`judgment-btn pass ${testCase.judgment === "pass" ? "active" : ""}`}
+                    type="button"
+                    aria-label="输出符合预期"
+                    onClick={() =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        testCases: item.testCases.map((t) =>
+                          t.id === testCase.id ? { ...t, judgment: t.judgment === "pass" ? null : "pass" } : t,
+                        ),
+                      }))
+                    }
+                  >
+                    <ThumbsUp size={13} />
+                    符合预期
+                  </button>
+                  <button
+                    className={`judgment-btn fail ${testCase.judgment === "fail" ? "active" : ""}`}
+                    type="button"
+                    aria-label="输出有问题"
+                    onClick={() =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        testCases: item.testCases.map((t) =>
+                          t.id === testCase.id ? { ...t, judgment: t.judgment === "fail" ? null : "fail" } : t,
+                        ),
+                      }))
+                    }
+                  >
+                    <ThumbsDown size={13} />
+                    有问题
+                  </button>
+                </div>
+                {testCase.judgment === "fail" && (
+                  <textarea
+                    className="judgment-note"
+                    value={testCase.judgmentNote ?? ""}
+                    placeholder="说说哪里有问题（可选，作为训练信号）"
+                    rows={2}
+                    onChange={(event) =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        testCases: item.testCases.map((t) =>
+                          t.id === testCase.id ? { ...t, judgmentNote: event.target.value } : t,
+                        ),
+                      }))
+                    }
+                  />
+                )}
                 <button className="ghost-button compact danger-button" type="button" onClick={() => deleteTestCase(testCase.id)}>
                   删除用例
                 </button>
