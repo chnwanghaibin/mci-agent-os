@@ -1592,6 +1592,16 @@ function TrainingRunModal({
     <div className="training-modal-backdrop" role="dialog" aria-modal="true" aria-label="训练运行中心">
       <div className="training-modal">
         <div className="training-modal-hero">
+          <button
+            className="icon-button training-modal-close"
+            type="button"
+            onClick={onClose}
+            disabled={!run.completed}
+            aria-label={run.completed ? "关闭训练报告" : "训练结束后可关闭"}
+            title={run.completed ? "关闭" : "训练结束后可关闭"}
+          >
+            <X size={17} />
+          </button>
           <div>
             <div className="eyebrow">Agent Training Run Center</div>
             <h2>{run.completed ? "训练完成，版本报告已生成" : "训练运行中"}</h2>
@@ -1602,13 +1612,7 @@ function TrainingRunModal({
           <div className="training-modal-status">
             <span>{run.completed ? "Completed" : "Live"}</span>
             <strong>{progress}%</strong>
-            {run.completed ? (
-              <button className="icon-button" type="button" onClick={onClose} aria-label="关闭训练报告">
-                <X size={17} />
-              </button>
-            ) : (
-              <small>训练结束后可关闭</small>
-            )}
+            <small>{run.completed ? "可关闭" : "训练结束后可关闭"}</small>
           </div>
         </div>
 
@@ -1715,7 +1719,7 @@ function TrainingRunModal({
           <span>{run.completed ? "训练报告、评估记录和详细步骤已写入版本时间线。" : `开始时间 ${run.startedAt}，正在采集训练指标。`}</span>
           {run.completed && (
             <button className="primary-button" type="button" onClick={onClose}>
-              查看版本时间线
+              关闭
             </button>
           )}
         </div>
@@ -1744,6 +1748,16 @@ function EvaluationRunModal({
     <div className="training-modal-backdrop" role="dialog" aria-modal="true" aria-label="评估反馈中心">
       <div className="training-modal evaluation-modal">
         <div className="training-modal-hero">
+          <button
+            className="icon-button training-modal-close"
+            type="button"
+            onClick={onClose}
+            disabled={!run.completed}
+            aria-label={run.completed ? "关闭评估反馈" : "评估结束后可关闭"}
+            title={run.completed ? "关闭" : "评估结束后可关闭"}
+          >
+            <X size={17} />
+          </button>
           <div>
             <div className="eyebrow">Evaluation Feedback Center</div>
             <h2>{run.completed ? "评估完成，反馈报告已生成" : "评估运行中"}</h2>
@@ -1754,13 +1768,7 @@ function EvaluationRunModal({
           <div className="training-modal-status">
             <span>{run.completed ? run.result.gate : "Live"}</span>
             <strong>{progress}%</strong>
-            {run.completed ? (
-              <button className="icon-button" type="button" onClick={onClose} aria-label="关闭评估反馈">
-                <X size={17} />
-              </button>
-            ) : (
-              <small>评估结束后可关闭</small>
-            )}
+            <small>{run.completed ? "可关闭" : "评估结束后可关闭"}</small>
           </div>
         </div>
 
@@ -1867,7 +1875,7 @@ function EvaluationRunModal({
           <span>{run.completed ? "评估记录、发现与优化建议已写入版本时间线。" : `开始时间 ${run.startedAt}，正在采集评估反馈。`}</span>
           {run.completed && (
             <button className="primary-button" type="button" onClick={onClose}>
-              查看评估记录
+              关闭
             </button>
           )}
         </div>

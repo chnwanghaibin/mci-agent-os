@@ -2380,8 +2380,8 @@ textarea:focus {
 }
 
 .training-modal {
-  width: min(1120px, calc(100vw - 56px));
-  height: min(820px, calc(100vh - 56px));
+  width: min(1320px, calc(100vw - 32px));
+  height: min(900px, calc(100vh - 32px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2398,12 +2398,34 @@ textarea:focus {
   display: flex;
   justify-content: space-between;
   gap: 24px;
-  padding: 22px 24px;
+  padding: 24px 64px 24px 28px;
   color: #f3fbfa;
   background:
     linear-gradient(135deg, rgba(10, 22, 38, 0.98), rgba(18, 42, 64, 0.96)),
     #0a1626;
   overflow: hidden;
+}
+
+.training-modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  color: #f3fbfa;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.training-modal-close:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.36);
+}
+
+.training-modal-close:disabled {
+  color: #8d9baa;
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.12);
+  opacity: 0.72;
 }
 
 .training-modal-hero::after {
@@ -2540,9 +2562,9 @@ textarea:focus {
 .training-modal-grid,
 .training-report-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
-  gap: 14px;
-  padding: 16px 18px 0;
+  grid-template-columns: minmax(0, 1.35fr) minmax(410px, 0.65fr);
+  gap: 16px;
+  padding: 18px 22px 0;
 }
 
 .training-modal-grid {
@@ -2552,7 +2574,7 @@ textarea:focus {
 }
 
 .training-report-grid {
-  flex: 0 0 188px;
+  flex: 0 0 220px;
   min-height: 0;
   overflow: hidden;
 }
@@ -2563,7 +2585,7 @@ textarea:focus {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
-  padding: 14px;
+  padding: 16px;
   min-height: 0;
 }
 
@@ -2634,14 +2656,14 @@ textarea:focus {
 
 .training-result-panel {
   display: grid;
-  grid-template-columns: 136px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: 152px minmax(0, 1fr);
+  gap: 16px;
   align-items: center;
   overflow: auto;
 }
 
 .modal-score-ring {
-  height: 136px;
+  height: 152px;
   border: 1px solid rgba(0, 206, 158, 0.48);
   border-radius: 8px;
   display: grid;
@@ -2654,7 +2676,7 @@ textarea:focus {
 }
 
 .modal-score-ring strong {
-  font-size: 42px;
+  font-size: 46px;
   line-height: 1;
 }
 
@@ -2667,14 +2689,14 @@ textarea:focus {
 .modal-metric-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px;
+  gap: 10px;
 }
 
 .modal-metric-grid div {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfd;
-  padding: 10px;
+  padding: 12px;
 }
 
 .modal-metric-grid span {
@@ -2705,7 +2727,7 @@ textarea:focus {
   align-items: center;
   gap: 14px;
   margin-top: 0;
-  padding: 14px 18px 18px;
+  padding: 16px 22px 20px;
   border-top: 1px solid var(--line);
   color: var(--muted);
   font-weight: 720;
