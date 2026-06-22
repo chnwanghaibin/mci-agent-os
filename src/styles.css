@@ -3150,6 +3150,12 @@ textarea:focus {
   grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
 }
 
+.timeline-panel .timeline-metric-grid,
+.timeline-panel .timeline-step-list,
+.timeline-panel .timeline-change-list {
+  grid-column: 2 / -1;
+}
+
 .timeline-metric {
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
@@ -3490,5 +3496,11 @@ textarea:focus {
 
   .timeline-panel .timeline-metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .timeline-panel .timeline-metric-grid,
+  .timeline-panel .timeline-step-list,
+  .timeline-panel .timeline-change-list {
+    grid-column: 1;
   }
 }
