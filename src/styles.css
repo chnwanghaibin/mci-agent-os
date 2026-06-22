@@ -4610,7 +4610,24 @@ textarea:focus {
   flex-shrink: 0;
 }
 
-.step-title-input {
+/* section-header is the page-level header row (title+subtitle left, action button right) */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 14px;
+  gap: 12px;
+}
+
+.section-subtitle {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+/* workflow-step-title: the editable title input inside the step header row */
+.workflow-step-title {
   flex: 1;
   font-size: 13px;
   font-weight: 600;
@@ -4618,9 +4635,11 @@ textarea:focus {
   outline: none;
   background: transparent;
   color: var(--ink);
+  min-width: 0;
 }
 
-.step-skill-badge {
+/* workflow-skill-badge: shown when a step was imported from a Skill */
+.workflow-skill-badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -4632,9 +4651,11 @@ textarea:focus {
   border: 1px solid #bbf7d0;
   font-weight: 600;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.step-anchor-toggle {
+/* workflow-anchor-toggle: the button that opens/closes the anchor editor */
+.workflow-anchor-toggle {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 20px;
@@ -4643,36 +4664,42 @@ textarea:focus {
   border: 1px solid #c7dcff;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.step-anchor-toggle:hover {
+.workflow-anchor-toggle:hover,
+.workflow-anchor-toggle.active {
   background: #dbeafe;
 }
 
-.step-body {
-  padding: 10px 14px;
-}
-
-.step-desc-input {
+/* workflow-step-desc: the SOP description textarea (rendered directly in .workflow-step-v2) */
+.workflow-step-desc {
   width: 100%;
   font-size: 12.5px;
   color: #374151;
   border: none;
+  border-top: 1px solid var(--line);
   outline: none;
-  background: transparent;
+  background: var(--surface-soft);
   resize: none;
   line-height: 1.5;
   font-family: inherit;
+  padding: 8px 14px;
+  display: block;
 }
 
 .anchor-editor {
-  margin-top: 10px;
+  margin: 0 14px 12px;
   border: 1px solid var(--line);
   border-radius: 6px;
   overflow: hidden;
 }
 
-.anchor-editor-header {
+/* anchor-editor-head: the header bar of the anchor editor */
+.anchor-editor-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4731,7 +4758,8 @@ textarea:focus {
   line-height: 1.4;
 }
 
-.anchor-field-required {
+.anchor-field-required,
+.anchor-required {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4741,10 +4769,12 @@ textarea:focus {
   cursor: pointer;
 }
 
-.anchor-field-required input {
+.anchor-field-required input,
+.anchor-required input {
   accent-color: #1d4ed8;
 }
 
+.anchor-add-field,
 .anchor-add-btn {
   display: block;
   width: 100%;
@@ -4758,6 +4788,29 @@ textarea:focus {
   cursor: pointer;
 }
 
+.anchor-add-field:hover,
 .anchor-add-btn:hover {
   background: #eef5ff;
+}
+
+/* workflow header action row (Skill picker + Add step button) */
+.workflow-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-apply-select {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  max-width: 200px;
+}
+
+.skill-apply-select:hover {
+  border-color: var(--green);
 }

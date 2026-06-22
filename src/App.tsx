@@ -3751,20 +3751,19 @@ function SkillLibraryPage({
   const categoryGroups = Array.from(new Set(skills.map((s) => s.category)));
 
   return (
-    <section className="page-section">
-      <div className="section-header">
-        <div>
-          <div className="section-title">
-            <Layers3 size={18} />
-            Skill 库
-          </div>
-          <div className="section-subtitle">
-            可复用的标准化步骤包，每个 Skill 含 SOP 步骤 + 输出锚点定义，可一键导入任意 Agent 工作流。
-          </div>
-        </div>
-        <button className="primary-button" type="button" onClick={onCreateSkill}>
-          + 新建 Skill
-        </button>
+    <section className="page">
+      <div className="page-sticky-zone">
+        <PageHeader
+          eyebrow="Skill Library"
+          title="Skill 库"
+          description="可复用的标准化步骤包，每个 Skill 含 SOP 步骤 + 输出锚点定义，可一键导入任意 Agent 工作流。"
+          actions={
+            <button className="primary-button" type="button" onClick={onCreateSkill}>
+              <Plus size={15} />
+              新建 Skill
+            </button>
+          }
+        />
       </div>
 
       <div className="skill-library-stats">
