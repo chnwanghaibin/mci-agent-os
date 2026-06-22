@@ -37,6 +37,7 @@ export interface RuleLibraryItem {
 
 export interface ToolItem {
   id: string;
+  sourceToolId?: string;
   name: string;
   description: string;
   enabled: boolean;
@@ -142,10 +143,21 @@ export interface RubricCriterion {
   guide: string;
 }
 
+// ── Failure Cluster ────────────────────────────────────────────────────────────
+
+export type ProposalTargetUnit = "few-shot" | "rule" | "retrieval" | "instruction" | "parameter";
+
+export interface FailureCluster {
+  id: string;
+  label: string;
+  caseCount: number;
+  diagnosis: string;
+  targetUnit: ProposalTargetUnit;
+}
+
 // ── Proposal (training diff card) ─────────────────────────────────────────────
 
 export type ProposalStatus = "pending" | "accepted" | "edited" | "rejected";
-export type ProposalTargetUnit = "few-shot" | "rule" | "retrieval" | "instruction" | "parameter";
 
 export interface Proposal {
   id: string;
@@ -158,6 +170,10 @@ export interface Proposal {
   status: ProposalStatus;
   editedContent?: string;
   riskFlag?: boolean;
+  clusterId?: string;
+  dependsOn?: string[];
+  conflictsWith?: string[];
+  ruleIsolationType?: "binding" | "create" | "content";
 }
 
 // ── Agent ─────────────────────────────────────────────────────────────────────
@@ -196,6 +212,7 @@ export interface Agent {
   fewShots?: FewShotExample[];
   retrievalConfig?: RetrievalConfig;
   rubric?: RubricCriterion[];
+  judgePhase?: "human" | "parallel" | "auto";
 }
 
 export interface AppState {

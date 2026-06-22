@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { cellKey, defaultState, functionalFlows, workFlows } from "./data";
-import type { Agent, AgentStatus, ApiKeyRecord, AppState, EvalRun, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RubricCriterion, RuleItem, RuleLibraryItem, ToolAsset, ViewName } from "./types";
+import type { Agent, AgentStatus, ApiKeyRecord, AppState, EvalRun, FailureCluster, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RubricCriterion, RuleItem, RuleLibraryItem, ToolAsset, ViewName } from "./types";
 
 const STORAGE_KEY = "dgt-agent-platform-demo";
 
@@ -47,34 +47,29 @@ const statusCopy: Record<AgentStatus, string> = {
 
 const trainingStepCatalog = [
   {
-    title: "样例集入库",
-    description: "载入标准案例、反例、预期输出和人工反馈样本，建立本轮训练基线。",
-    system: "Dataset Orchestrator",
-  },
-  {
-    title: "知识检索校准",
-    description: "检查关联知识库覆盖度、片段召回和业务标签命中，修正检索优先级。",
-    system: "Retrieval Evaluator",
-  },
-  {
-    title: "规则边界验证",
-    description: "逐条验证启用规则、优先级、人工复核条件和低置信度处理边界。",
-    system: "Rule Guardrail Engine",
-  },
-  {
-    title: "工具链 Dry-run",
-    description: "模拟调用知识检索、规则校验、报告生成、路由和人工复核工具。",
-    system: "Tool Runtime Sandbox",
-  },
-  {
-    title: "回归评测",
-    description: "运行测试用例库，比较训练前后输出质量、通过率和失败用例原因。",
+    title: "基线评估",
+    description: "在训练集和留出集上运行当前版本，按 Rubric 各维度计算基线分和失败用例列表。",
     system: "Evaluation Harness",
   },
   {
-    title: "生成版本报告",
-    description: "固化版本号、质量分、改动摘要、风险项和下一轮优化建议。",
-    system: "Version Reporter",
+    title: "失败聚类",
+    description: "对失败用例进行语义聚类，将零散失败归纳成有意义的失败主题，用于精准定向提案。",
+    system: "Cluster Analyzer",
+  },
+  {
+    title: "根因诊断",
+    description: "Critic 模型分析每个失败主题的根本原因，定位到具体的白盒配置单元缺失。",
+    system: "Critic Model",
+  },
+  {
+    title: "生成改动提案",
+    description: "Proposer 针对每个失败主题，生成指向白盒单元的改动 diff，附诊断理由和风险评分。",
+    system: "Proposer Model",
+  },
+  {
+    title: "提案质量过滤",
+    description: "Critic 过滤低质量、重复或高风险提案，标注依赖关系，输出最终审查列表。",
+    system: "Critic Filter",
   },
 ];
 const trainingSteps = trainingStepCatalog.map((step) => step.title);
@@ -132,16 +127,19 @@ type TrainingRunState = {
   completed: boolean;
   result: TrainingRunResult;
   proposals: Proposal[];
+  clusters: FailureCluster[];
 };
 
 type ProposalReviewState = {
   agentId: string;
   proposals: Proposal[];
+  clusters: FailureCluster[];
   phase: "review" | "gating" | "done";
   gateResult: {
     passed: boolean;
     trainDelta: number;
     holdoutDelta: number;
+    holdoutCount: number;
     autoRejectedIds: string[];
   } | null;
   trainingResult: TrainingRunResult;
@@ -558,37 +556,33 @@ function buildTrainingRunResult(agent: Agent): TrainingRunResult {
     steps: [
       {
         title: trainingStepCatalog[0].title,
-        detail: `载入 ${cases} 条测试用例、${passedCases} 条已通过样例和人工反馈样本，生成本轮评测基线。`,
+        detail: `在 ${cases} 个用例（训练 + 留出）上跑当前版本，基线质量分 ${agent.score}，失败 ${failed} 个。`,
         metric: `${cases} cases`,
-        status: "完成",
+        status: failed ? "需关注" : "完成",
       },
       {
         title: trainingStepCatalog[1].title,
-        detail: `扫描 ${agent.knowledgeIds.length} 份关联知识，覆盖度 ${knowledgeCoverage}%，优先绑定高相关业务片段。`,
-        metric: `${knowledgeCoverage}% coverage`,
-        status: knowledgeCoverage >= 80 ? "完成" : "需关注",
+        detail: failed > 0
+          ? `对 ${failed} 个失败用例进行语义聚类，识别出 ${Math.min(failed, 3)} 个主要失败主题。`
+          : "无失败用例，跳过聚类步骤。",
+        metric: failed > 0 ? `${Math.min(failed, 3)} clusters` : "0 clusters",
+        status: "完成",
       },
       {
         title: trainingStepCatalog[2].title,
-        detail: `验证 ${enabledRules} 条启用规则的触发条件、优先级和人工复核边界。`,
-        metric: `${enabledRules} rules`,
-        status: enabledRules ? "完成" : "需关注",
+        detail: `Critic 模型对各失败主题进行根因分析，定位到 ${Math.min(failed + 1, 3)} 个白盒单元缺失。`,
+        metric: `${Math.min(failed + 1, 3)} issues`,
+        status: "完成",
       },
       {
         title: trainingStepCatalog[3].title,
-        detail: `模拟执行 ${toolsVerified} 个工具调用，检查输入输出契约、错误回退和链路耗时。`,
-        metric: `${toolsVerified} calls`,
+        detail: `Proposer 针对各失败主题生成改动 diff，共 ${Math.min(failed + 2, 4)} 条候选提案，附风险评分。`,
+        metric: `${Math.min(failed + 2, 4)} proposals`,
         status: "完成",
       },
       {
         title: trainingStepCatalog[4].title,
-        detail: `完成 ${cases} 个样例回归，失败 ${failed} 个，通过率 ${passRate}%，置信度 ${confidence}%。`,
-        metric: `${passRate}% pass`,
-        status: failed ? "需关注" : "完成",
-      },
-      {
-        title: trainingStepCatalog[5].title,
-        detail: `生成 ${versionAfter} 版本报告，记录质量分、改动点、建议和评估快照。`,
+        detail: `Critic 过滤并标注依赖关系，输出 ${Math.min(failed + 2, 4)} 条进入人工审查闸门的最终提案。`,
         metric: `${agent.version} -> ${versionAfter}`,
         status: "记录",
       },
@@ -681,16 +675,62 @@ function buildEvaluationRunResult(agent: Agent): EvaluationRunResult {
   };
 }
 
-function buildMockProposals(agent: Agent): Proposal[] {
+function buildMockClusters(agent: Agent): FailureCluster[] {
+  const failedCases = agent.testCases.filter((c) => c.status !== "通过");
+  const isContract = /(合同|合规|contract)/i.test(`${agent.name} ${agent.type}`);
+  const ts = Date.now();
+  const clusters: FailureCluster[] = [];
+
+  if (failedCases.length > 0) {
+    clusters.push({
+      id: `cl-${ts}-1`,
+      label: isContract ? "数据授权条款遗漏" : "批量异常处理缺失",
+      caseCount: Math.max(1, Math.floor(failedCases.length * 0.5)),
+      diagnosis: isContract
+        ? "Agent 在含数据授权条款的合同中未主动比对授权范围与披露口径，导致高风险项被漏判。"
+        : "Agent 在涉及批量门店异常时未触发升级处理逻辑，仅给出通用建议。",
+      targetUnit: "instruction",
+    });
+    clusters.push({
+      id: `cl-${ts}-2`,
+      label: isContract ? "规则优先级判断错误" : "知识片段召回不足",
+      caseCount: Math.max(1, Math.floor(failedCases.length * 0.35)),
+      diagnosis: isContract
+        ? "相关规则存在但优先级设置偏低，Agent 指令未明确要求规则检查，导致低优先级规则漏触发。"
+        : "检索 top_k 不足，关键知识片段未被纳入上下文，Agent 只能凭通用知识作答。",
+      targetUnit: isContract ? "rule" : "retrieval",
+    });
+  }
+
+  if (agent.score < 85) {
+    clusters.push({
+      id: `cl-${ts}-3`,
+      label: "示范覆盖缺口",
+      caseCount: 1,
+      diagnosis: "当前 Few-shot 示例未覆盖边界场景，模型在陌生输入结构下输出不稳定。",
+      targetUnit: "few-shot",
+    });
+  }
+
+  return clusters;
+}
+
+function buildMockProposals(agent: Agent, clusters: FailureCluster[]): Proposal[] {
   const failedCase = agent.testCases.find((c) => c.status !== "通过");
   const currentTopK = agent.retrievalConfig?.topK ?? 4;
   const ts = Date.now();
   const isContract = /(合同|合规|contract)/i.test(`${agent.name} ${agent.type}`);
   const proposals: Proposal[] = [];
 
+  const cl1 = clusters[0];
+  const cl2 = clusters[1];
+  const cl3 = clusters[2];
+  const idFs = `p-fs-${ts}`;
+  const idRet = `p-ret-${ts + 2}`;
+
   if (failedCase) {
     proposals.push({
-      id: `p-fs-${ts}`,
+      id: idFs,
       unit: "few-shot",
       unitLabel: "Few-shot 示范",
       before: "（当前无该场景示例）",
@@ -699,6 +739,7 @@ function buildMockProposals(agent: Agent): Proposal[] {
       triggerCase: failedCase.name,
       status: "pending",
       riskFlag: false,
+      clusterId: cl3?.id,
     });
   }
 
@@ -706,18 +747,34 @@ function buildMockProposals(agent: Agent): Proposal[] {
     id: `p-rule-${ts + 1}`,
     unit: "rule",
     unitLabel: "规则绑定",
-    before: "（相关规则未覆盖该判断边界）",
-    after: isContract
-      ? "新增规则：数据授权范围与披露口径需一致，优先级高，分类合规"
-      : "新增规则：批量门店异常需升级处理并说明责任方，优先级高",
-    reason: `失败用例中发现当前规则集未覆盖该判断边界，补充后可提升规则命中率。`,
+    before: isContract ? "「数据授权口径一致性」规则：当前停用" : "「批量异常升级处理」规则：当前停用",
+    after: isContract ? "「数据授权口径一致性」规则：启用，优先级高" : "「批量异常升级处理」规则：启用，优先级高",
+    reason: "失败用例中该规则未触发，检查发现规则存在于规则库但当前 Agent 未启用，直接启用即可。",
     triggerCase: failedCase?.name ?? "边界判断未覆盖",
     status: "pending",
     riskFlag: false,
+    clusterId: cl2?.id,
+    ruleIsolationType: "binding",
   });
 
   proposals.push({
-    id: `p-ret-${ts + 2}`,
+    id: `p-rule-new-${ts + 1}`,
+    unit: "rule",
+    unitLabel: "新建私有草稿规则",
+    before: "（规则库中无对应规则）",
+    after: isContract
+      ? "新建草稿：「披露材料版本与合同签署日期需在同一报告期」，优先级中，仅当前 Agent 可见"
+      : "新建草稿：「跨节点异常影响范围需说明受影响门店数量」，优先级中，仅当前 Agent 可见",
+    reason: "规则库中无覆盖该场景的标准规则，建议新建私有草稿规则。成熟后可由资产维护者提升为共享规则。",
+    triggerCase: failedCase?.name ?? "规则库覆盖缺口",
+    status: "pending",
+    riskFlag: false,
+    clusterId: cl1?.id,
+    ruleIsolationType: "create",
+  });
+
+  proposals.push({
+    id: idRet,
     unit: "retrieval",
     unitLabel: "检索配置",
     before: `top_k = ${currentTopK}，标签过滤：${agent.retrievalConfig?.tagFilters?.join("、") ?? "当前配置"}`,
@@ -726,6 +783,7 @@ function buildMockProposals(agent: Agent): Proposal[] {
     triggerCase: failedCase?.name ?? "知识检索未命中",
     status: "pending",
     riskFlag: false,
+    clusterId: cl2?.id,
   });
 
   if (agent.score < 85) {
@@ -740,6 +798,9 @@ function buildMockProposals(agent: Agent): Proposal[] {
       triggerCase: failedCase?.name ?? "关键检查遗漏",
       status: "pending",
       riskFlag: false,
+      clusterId: cl1?.id,
+      dependsOn: failedCase ? [idFs] : undefined,
+      conflictsWith: [idRet],
     });
   }
 
@@ -911,7 +972,8 @@ export default function App() {
     const target = agentsById[agentId];
     if (!target) return;
     const result = buildTrainingRunResult(target);
-    const proposals = buildMockProposals(target);
+    const clusters = buildMockClusters(target);
+    const proposals = buildMockProposals(target, clusters);
     setTrainingAgentId(agentId);
     setTrainingStep(0);
     setTrainingRun({
@@ -920,6 +982,7 @@ export default function App() {
       completed: false,
       result,
       proposals,
+      clusters,
     });
     trainingSteps.forEach((_, index) => {
       window.setTimeout(() => {
@@ -941,6 +1004,7 @@ export default function App() {
     setProposalReview({
       agentId: trainingRun.agentId,
       proposals: trainingRun.proposals,
+      clusters: trainingRun.clusters,
       phase: "review",
       gateResult: null,
       trainingResult: trainingRun.result,
@@ -964,6 +1028,8 @@ export default function App() {
     if (!proposalReview) return;
     const accepted = proposalReview.proposals.filter((p) => p.status === "accepted" || p.status === "edited");
     const rejected = proposalReview.proposals.filter((p) => p.status === "rejected");
+    const agentForReview = agentsById[proposalReview.agentId];
+    const holdoutCount = agentForReview?.testCases.filter((c) => c.split === "holdout").length ?? 0;
     setProposalReview((current) => current ? { ...current, phase: "gating" } : null);
 
     window.setTimeout(() => {
@@ -979,6 +1045,7 @@ export default function App() {
                 passed: trainDelta > 0 && holdoutDelta >= 0,
                 trainDelta,
                 holdoutDelta,
+                holdoutCount,
                 autoRejectedIds,
               },
             }
@@ -1267,39 +1334,68 @@ export default function App() {
   };
 
   const createRuleForAgent = (agentId?: string) => {
-    const id = `rule-${Date.now()}`;
-    const newRule: RuleLibraryItem = {
-      id,
-      title: "新增业务规则",
-      description: "填写规则适用条件、处理方式和人工复核边界。",
-      priority: "中",
+    if (agentId) {
+      // Agent 视角下新增 → 私有草稿，不写入共享规则库
+      updateAgent(agentId, (agent) => ({
+        ...agent,
+        rules: [
+          ...agent.rules,
+          {
+            id: `draft-rule-${Date.now()}`,
+            title: "新增私有草稿规则",
+            description: "填写规则适用条件、处理方式和人工复核边界。仅该 Agent 可见，可提升为共享规则。",
+            priority: "中" as const,
+            enabled: true,
+          },
+        ],
+      }));
+      notify("私有草稿规则已新增，仅当前 Agent 可见");
+    } else {
+      // 从规则库页面新增 → 写入共享库
+      const id = `rule-${Date.now()}`;
+      const newRule: RuleLibraryItem = {
+        id,
+        title: "新增业务规则",
+        description: "填写规则适用条件、处理方式和人工复核边界。",
+        priority: "中",
+        category: "业务",
+        tags: ["新增规则", "待完善"],
+        updatedAt: nowLabel(),
+      };
+      setState((current) => ({ ...current, rules: [newRule, ...current.rules] }));
+      notify("规则已新增到统一规则库");
+    }
+  };
+
+  const promoteRuleToLibrary = (agentId: string, localRuleId: string) => {
+    const agent = agentsById[agentId];
+    const localRule = agent?.rules.find((r) => r.id === localRuleId);
+    if (!localRule) return;
+    const libraryId = `rule-promoted-${Date.now()}`;
+    const newSharedRule: RuleLibraryItem = {
+      id: libraryId,
+      title: localRule.title,
+      description: localRule.description,
+      priority: localRule.priority,
       category: "业务",
-      tags: ["新增规则", "待完善"],
-      updatedAt: "2026-06-21",
+      tags: ["从草稿提升"],
+      updatedAt: nowLabel(),
     };
     setState((current) => ({
       ...current,
-      rules: [newRule, ...current.rules],
-      agents: current.agents.map((agent) =>
-        agentId && agent.id === agentId
+      rules: [newSharedRule, ...current.rules],
+      agents: current.agents.map((a) =>
+        a.id === agentId
           ? {
-              ...agent,
-              rules: [
-                ...agent.rules,
-                {
-                  id: `local-rule-${Date.now()}`,
-                  sourceRuleId: id,
-                  title: newRule.title,
-                  description: newRule.description,
-                  priority: newRule.priority,
-                  enabled: true,
-                },
-              ],
+              ...a,
+              rules: a.rules.map((r) =>
+                r.id === localRuleId ? { ...r, sourceRuleId: libraryId } : r,
+              ),
             }
-          : agent,
+          : a,
       ),
     }));
-    notify(agentId ? "规则已新增并关联当前 Agent" : "规则已新增到统一规则库");
+    notify("草稿规则已提升为共享规则，所有 Agent 可引用");
   };
 
   const detachRuleFromAgent = (agentId: string, localRuleId: string) => {
@@ -1308,6 +1404,36 @@ export default function App() {
       rules: agent.rules.filter((rule) => rule.id !== localRuleId),
     }));
     notify("规则已从当前 Agent 移除");
+  };
+
+  const attachToolToAgent = (agentId: string, toolAssetId: string) => {
+    const asset = state.tools.find((t) => t.id === toolAssetId);
+    if (!asset) return;
+    updateAgent(agentId, (agent) => {
+      if (agent.tools.some((t) => t.sourceToolId === toolAssetId)) return agent;
+      return {
+        ...agent,
+        tools: [
+          ...agent.tools,
+          {
+            id: `tool-${Date.now()}`,
+            sourceToolId: asset.id,
+            name: asset.name,
+            description: asset.description,
+            enabled: asset.status === "启用",
+          },
+        ],
+      };
+    });
+    notify("工具已从工具库关联至当前 Agent");
+  };
+
+  const detachToolFromAgent = (agentId: string, toolItemId: string) => {
+    updateAgent(agentId, (agent) => ({
+      ...agent,
+      tools: agent.tools.filter((t) => t.id !== toolItemId),
+    }));
+    notify("工具已从当前 Agent 移除");
   };
 
   const duplicateAgent = (agentId: string) => {
@@ -1727,6 +1853,10 @@ export default function App() {
             onCreateRule={createRuleForAgent}
             onUpdateAgentRule={updateAgentRule}
             onDetachRule={detachRuleFromAgent}
+            toolLibrary={state.tools}
+            onAttachTool={attachToolToAgent}
+            onDetachTool={detachToolFromAgent}
+            onPromoteRule={promoteRuleToLibrary}
           />
         )}
       </main>
@@ -1797,9 +1927,11 @@ function TrainingRunModal({
           </button>
           <div>
             <div className="eyebrow">Agent Training Run Center</div>
-            <h2>{run.completed ? "训练完成，版本报告已生成" : "训练运行中"}</h2>
+            <h2>{run.completed ? "训练完成，改动提案已就绪" : "训练运行中"}</h2>
             <p>
-              {agent.name} 正在执行样例回归、知识检索校准、规则边界验证、工具链 Dry-run 和版本报告生成。
+              {run.completed
+                ? `基线评估 → 失败聚类（${run.clusters.length} 个主题）→ 根因诊断 → 提案生成 → 质量过滤，共生成 ${run.proposals.length} 条改动建议。`
+                : `${agent.name} 正在执行基线评估、失败聚类、根因诊断、提案生成和质量过滤。`}
             </p>
           </div>
           <div className="training-modal-status">
@@ -1882,6 +2014,29 @@ function TrainingRunModal({
             </div>
           </section>
         </div>
+
+        {run.completed && run.clusters.length > 0 && (
+          <div className="training-cluster-summary">
+            <div className="section-title small">
+              <Filter size={16} />
+              失败聚类结果
+            </div>
+            <div className="cluster-card-list">
+              {run.clusters.map((cluster) => (
+                <div className="cluster-card" key={cluster.id}>
+                  <div className="cluster-card-header">
+                    <span className={`proposal-unit-pill ${unitColors[cluster.targetUnit] ?? ""}`}>
+                      {cluster.targetUnit === "few-shot" ? "Few-shot" : cluster.targetUnit === "rule" ? "规则" : cluster.targetUnit === "retrieval" ? "检索" : cluster.targetUnit === "instruction" ? "指令" : "参数"}
+                    </span>
+                    <strong>{cluster.label}</strong>
+                    <span className="cluster-case-count">{cluster.caseCount} 个用例</span>
+                  </div>
+                  <p>{cluster.diagnosis}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="training-report-grid">
           <section>
@@ -2118,6 +2273,23 @@ function ProposalReviewModal({
   const rejectedCount = review.proposals.filter((p) => p.status === "rejected").length;
   const allDecided = pendingCount === 0;
 
+  const clusterMap = new Map(review.clusters.map((c) => [c.id, c]));
+  const grouped = new Map<string | undefined, Proposal[]>();
+  for (const p of review.proposals) {
+    const key = p.clusterId;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(p);
+  }
+  const orderedGroupKeys = [
+    ...review.clusters.map((c) => c.id as string | undefined),
+    undefined,
+  ].filter((k) => grouped.has(k));
+
+  const getDepLabel = (depId: string) => {
+    const dep = review.proposals.find((p) => p.id === depId);
+    return dep?.unitLabel ?? depId;
+  };
+
   const startEdit = (proposal: Proposal) => {
     setEditingId(proposal.id);
     setEditDraft(proposal.editedContent ?? proposal.after);
@@ -2187,105 +2359,173 @@ function ProposalReviewModal({
 
         {review.phase !== "gating" && (
           <div className="proposal-list">
-            {review.proposals.map((proposal) => {
-              const isEditing = editingId === proposal.id;
-              const isAutoRejected = review.gateResult?.autoRejectedIds.includes(proposal.id);
+            {orderedGroupKeys.map((groupKey) => {
+              const cluster = groupKey ? clusterMap.get(groupKey) : undefined;
+              const groupProposals = grouped.get(groupKey) ?? [];
               return (
-                <div
-                  className={`proposal-card ${proposal.status !== "pending" ? `proposal-${proposal.status}` : ""} ${isAutoRejected ? "proposal-auto-rejected" : ""}`}
-                  key={proposal.id}
-                >
-                  <div className="proposal-card-header">
-                    <span className={`proposal-unit-pill ${unitColors[proposal.unit] ?? ""}`}>{proposal.unitLabel}</span>
-                    {proposal.riskFlag && (
-                      <span className="proposal-risk-flag">
-                        <AlertTriangle size={13} />
-                        过拟合风险
+                <div className="proposal-cluster-group" key={groupKey ?? "__unclustered__"}>
+                  {cluster && (
+                    <div className="proposal-cluster-header">
+                      <span className={`proposal-unit-pill ${unitColors[cluster.targetUnit] ?? ""}`}>
+                        {cluster.targetUnit === "few-shot" ? "Few-shot" : cluster.targetUnit === "rule" ? "规则" : cluster.targetUnit === "retrieval" ? "检索" : cluster.targetUnit === "instruction" ? "指令" : "参数"}
                       </span>
-                    )}
-                    {isAutoRejected && <span className="proposal-risk-flag">⚙ 守门自动剔除</span>}
-                    {proposal.status !== "pending" && !isAutoRejected && (
-                      <span className={`proposal-decision-badge proposal-decision-${proposal.status}`}>
-                        {proposal.status === "accepted" ? "✓ 已接受" : proposal.status === "edited" ? "✎ 已编辑" : "✗ 已拒绝"}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="proposal-diff">
-                    <div className="proposal-diff-before">
-                      <span>改前</span>
-                      <p>{proposal.before}</p>
-                    </div>
-                    <div className="proposal-diff-arrow">→</div>
-                    <div className="proposal-diff-after">
-                      <span>改后</span>
-                      {isEditing ? (
-                        <textarea
-                          className="proposal-edit-textarea"
-                          value={editDraft}
-                          onChange={(e) => setEditDraft(e.target.value)}
-                          rows={3}
-                          autoFocus
-                        />
-                      ) : (
-                        <p>{proposal.editedContent ?? proposal.after}</p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="proposal-meta">
-                    <div className="proposal-reason">
-                      <span>诊断原因</span>
-                      <p>{proposal.reason}</p>
-                    </div>
-                    <div className="proposal-trigger">
-                      <span>触发用例</span>
-                      <strong>{proposal.triggerCase}</strong>
-                    </div>
-                  </div>
-
-                  {review.phase === "review" && (
-                    <div className="proposal-actions">
-                      {isEditing ? (
-                        <>
-                          <button className="proposal-btn-accept" type="button" onClick={() => saveEdit(proposal.id)}>
-                            <Save size={13} />
-                            保存编辑
-                          </button>
-                          <button className="proposal-btn-reject" type="button" onClick={cancelEdit}>
-                            取消
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            className={`proposal-btn-accept ${proposal.status === "accepted" ? "active" : ""}`}
-                            type="button"
-                            onClick={() => onUpdateProposal(proposal.id, { status: "accepted" })}
-                          >
-                            <ThumbsUp size={13} />
-                            接受
-                          </button>
-                          <button
-                            className={`proposal-btn-edit ${proposal.status === "edited" ? "active" : ""}`}
-                            type="button"
-                            onClick={() => startEdit(proposal)}
-                          >
-                            <Edit3 size={13} />
-                            编辑后接受
-                          </button>
-                          <button
-                            className={`proposal-btn-reject ${proposal.status === "rejected" ? "active" : ""}`}
-                            type="button"
-                            onClick={() => onUpdateProposal(proposal.id, { status: "rejected" })}
-                          >
-                            <ThumbsDown size={13} />
-                            拒绝
-                          </button>
-                        </>
-                      )}
+                      <strong>{cluster.label}</strong>
+                      <span className="cluster-case-count">{cluster.caseCount} 个失败用例</span>
                     </div>
                   )}
+                  {!cluster && groupProposals.length > 0 && (
+                    <div className="proposal-cluster-header unclustered">
+                      <strong>其他改动建议</strong>
+                    </div>
+                  )}
+                  {groupProposals.map((proposal) => {
+                    const isEditing = editingId === proposal.id;
+                    const isAutoRejected = review.gateResult?.autoRejectedIds.includes(proposal.id);
+                    return (
+                      <div
+                        className={`proposal-card ${proposal.status !== "pending" ? `proposal-${proposal.status}` : ""} ${isAutoRejected ? "proposal-auto-rejected" : ""}`}
+                        key={proposal.id}
+                      >
+                        <div className="proposal-card-header">
+                          <span className={`proposal-unit-pill ${unitColors[proposal.unit] ?? ""}`}>{proposal.unitLabel}</span>
+                          {proposal.unit === "rule" && proposal.ruleIsolationType && (
+                            <span className={`rule-isolation-pill isolation-${proposal.ruleIsolationType}`}>
+                              {proposal.ruleIsolationType === "binding" ? "启/停绑定" : proposal.ruleIsolationType === "create" ? "新建草稿" : "修改共享规则"}
+                            </span>
+                          )}
+                          {proposal.unit === "rule" && proposal.ruleIsolationType === "content" && (
+                            <span className="proposal-risk-flag">
+                              <AlertTriangle size={13} />
+                              高风险·影响所有引用方
+                            </span>
+                          )}
+                          {proposal.riskFlag && proposal.ruleIsolationType !== "content" && (
+                            <span className="proposal-risk-flag">
+                              <AlertTriangle size={13} />
+                              过拟合风险
+                            </span>
+                          )}
+                          {isAutoRejected && <span className="proposal-risk-flag">⚙ 守门自动剔除</span>}
+                          {proposal.status !== "pending" && !isAutoRejected && (
+                            <span className={`proposal-decision-badge proposal-decision-${proposal.status}`}>
+                              {proposal.status === "accepted" ? "✓ 已接受" : proposal.status === "edited" ? "✎ 已编辑" : "✗ 已拒绝"}
+                            </span>
+                          )}
+                        </div>
+
+                        {(proposal.dependsOn?.length || proposal.conflictsWith?.length) && (
+                          <div className="proposal-dep-row">
+                            {proposal.dependsOn?.map((depId) => (
+                              <span className="proposal-dep-badge dep" key={depId}>
+                                依赖 · {getDepLabel(depId)}
+                              </span>
+                            ))}
+                            {proposal.conflictsWith?.map((conId) => (
+                              <span className="proposal-dep-badge conflict" key={conId}>
+                                冲突 · {getDepLabel(conId)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="proposal-diff">
+                          <div className="proposal-diff-before">
+                            <span>改前</span>
+                            <p>{proposal.before}</p>
+                          </div>
+                          <div className="proposal-diff-arrow">→</div>
+                          <div className="proposal-diff-after">
+                            <span>改后</span>
+                            {isEditing ? (
+                              <textarea
+                                className="proposal-edit-textarea"
+                                value={editDraft}
+                                onChange={(e) => setEditDraft(e.target.value)}
+                                rows={3}
+                                autoFocus
+                              />
+                            ) : (
+                              <p>{proposal.editedContent ?? proposal.after}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="proposal-meta">
+                          <div className="proposal-reason">
+                            <span>诊断原因</span>
+                            <p>{proposal.reason}</p>
+                          </div>
+                          <div className="proposal-trigger">
+                            <span>触发用例</span>
+                            <strong>{proposal.triggerCase}</strong>
+                          </div>
+                        </div>
+
+                        {review.phase === "review" && (
+                          <div className="proposal-actions">
+                            {proposal.unit === "rule" && proposal.ruleIsolationType === "content" ? (
+                              <>
+                                <span className="rule-content-notice">修改共享规则内容需资产维护者审批，业务训练者只能提交申请。</span>
+                                <button
+                                  className="proposal-btn-edit"
+                                  type="button"
+                                  onClick={() => onUpdateProposal(proposal.id, { status: "accepted" })}
+                                >
+                                  <Save size={13} />
+                                  提交变更申请
+                                </button>
+                                <button
+                                  className={`proposal-btn-reject ${proposal.status === "rejected" ? "active" : ""}`}
+                                  type="button"
+                                  onClick={() => onUpdateProposal(proposal.id, { status: "rejected" })}
+                                >
+                                  <ThumbsDown size={13} />
+                                  拒绝
+                                </button>
+                              </>
+                            ) : isEditing ? (
+                              <>
+                                <button className="proposal-btn-accept" type="button" onClick={() => saveEdit(proposal.id)}>
+                                  <Save size={13} />
+                                  保存编辑
+                                </button>
+                                <button className="proposal-btn-reject" type="button" onClick={cancelEdit}>
+                                  取消
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  className={`proposal-btn-accept ${proposal.status === "accepted" ? "active" : ""}`}
+                                  type="button"
+                                  onClick={() => onUpdateProposal(proposal.id, { status: "accepted" })}
+                                >
+                                  <ThumbsUp size={13} />
+                                  接受
+                                </button>
+                                <button
+                                  className={`proposal-btn-edit ${proposal.status === "edited" ? "active" : ""}`}
+                                  type="button"
+                                  onClick={() => startEdit(proposal)}
+                                >
+                                  <Edit3 size={13} />
+                                  编辑后接受
+                                </button>
+                                <button
+                                  className={`proposal-btn-reject ${proposal.status === "rejected" ? "active" : ""}`}
+                                  type="button"
+                                  onClick={() => onUpdateProposal(proposal.id, { status: "rejected" })}
+                                >
+                                  <ThumbsDown size={13} />
+                                  拒绝
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}
@@ -2311,11 +2551,21 @@ function ProposalReviewModal({
           )}
           {review.phase === "done" && review.gateResult && (
             <>
-              <span>
-                训练集质量分 {review.trainingResult.scoreBefore}→+{review.gateResult.trainDelta}，
-                留出集 {review.gateResult.holdoutDelta >= 0 ? `+${review.gateResult.holdoutDelta}` : review.gateResult.holdoutDelta}，
-                {review.gateResult.passed ? "守门通过。" : "留出集未提升，部分改动已自动剔除。"}
-              </span>
+              <div className="gate-result-block">
+                <span>
+                  训练集质量分 {review.trainingResult.scoreBefore}→+{review.gateResult.trainDelta}，
+                  留出集 {review.gateResult.holdoutDelta >= 0 ? `+${review.gateResult.holdoutDelta}` : review.gateResult.holdoutDelta}，
+                  {review.gateResult.passed ? "守门通过。" : "留出集未提升，部分改动已自动剔除。"}
+                </span>
+                {review.gateResult.holdoutCount < 10 && (
+                  <span className="gate-reliability-note">
+                    <AlertTriangle size={12} />
+                    {review.gateResult.holdoutCount === 0
+                      ? "留出集为空，守门结论仅供参考，建议补充留出用例后重新评估。"
+                      : `留出集仅 ${review.gateResult.holdoutCount} 条，样本量偏少，结论可信度有限。`}
+                  </span>
+                )}
+              </div>
               <div className="training-footer-actions">
                 <button className="ghost-button" type="button" onClick={onClose}>
                   放弃本轮
@@ -3719,6 +3969,10 @@ function AgentDetailPage({
   onCreateRule,
   onUpdateAgentRule,
   onDetachRule,
+  toolLibrary,
+  onAttachTool,
+  onDetachTool,
+  onPromoteRule,
 }: {
   agent: Agent;
   docs: KnowledgeDoc[];
@@ -3740,12 +3994,17 @@ function AgentDetailPage({
   onCreateRule: (agentId?: string) => void;
   onUpdateAgentRule: (agentId: string, localRuleId: string, patch: Partial<RuleItem>) => void;
   onDetachRule: (agentId: string, localRuleId: string) => void;
+  toolLibrary: ToolAsset[];
+  onAttachTool: (agentId: string, toolAssetId: string) => void;
+  onDetachTool: (agentId: string, toolItemId: string) => void;
+  onPromoteRule: (agentId: string, localRuleId: string) => void;
 }) {
   const [feedbackScore, setFeedbackScore] = useState(agent.feedbackScore ?? 5);
   const [feedbackNote, setFeedbackNote] = useState(agent.feedbackNote ?? "输出建议更具体，适合纳入下一轮优化。");
   const [publishWork, setPublishWork] = useState(agent.matrixCellKey?.split(":")[0] ?? "contractual");
   const [publishFunc, setPublishFunc] = useState(agent.matrixCellKey?.split(":")[1] ?? "contract-registrar");
   const [ruleToAttach, setRuleToAttach] = useState(ruleLibrary[0]?.id ?? "");
+  const [toolToAttach, setToolToAttach] = useState(toolLibrary[0]?.id ?? "");
   const [activeDetailSection, setActiveDetailSection] = useState("detail-overview");
   const [detailSlideDirection, setDetailSlideDirection] = useState<"forward" | "backward">("forward");
   const isTraining = trainingAgentId === agent.id;
@@ -3808,29 +4067,6 @@ function AgentDetailPage({
   const paneClass = (sectionId: string, extra = "") =>
     `detail-pane-item detail-pane-${sectionId.replace("detail-", "")} ${activeDetailSection === sectionId ? `active slide-${detailSlideDirection}` : ""} ${extra}`.trim();
 
-  const addAgentTool = () => {
-    onUpdateAgent(agent.id, (item) => ({
-      ...item,
-      tools: [
-        ...item.tools,
-        {
-          id: `tool-${Date.now()}`,
-          name: "新增工具能力",
-          description: "补充该 Agent 在执行流程中可调用的工具能力。",
-          enabled: true,
-        },
-      ],
-    }));
-    onNotify("Agent 工具能力已新增");
-  };
-
-  const deleteAgentTool = (toolId: string) => {
-    onUpdateAgent(agent.id, (item) => ({
-      ...item,
-      tools: item.tools.filter((tool) => tool.id !== toolId),
-    }));
-    onNotify("Agent 工具能力已删除");
-  };
 
   const addGuardrail = () => {
     onUpdateAgent(agent.id, (item) => ({
@@ -4233,14 +4469,25 @@ function AgentDetailPage({
         </div>
 
         <section className={paneClass("detail-tools", "panel")}>
-          <div className="section-title with-action">
-            <span>
-              <Wrench size={16} />
-              工具能力
-            </span>
-            <button className="ghost-button compact" type="button" onClick={addAgentTool}>
-              <Plus size={15} />
-              添加工具
+          <div className="section-title">
+            <Wrench size={16} />
+            工具能力
+          </div>
+          <div className="rule-picker">
+            <select value={toolToAttach} onChange={(event) => setToolToAttach(event.target.value)}>
+              {toolLibrary.map((tool) => (
+                <option key={tool.id} value={tool.id}>
+                  {tool.category} / {tool.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="secondary-button compact"
+              type="button"
+              onClick={() => onAttachTool(agent.id, toolToAttach)}
+              disabled={!toolToAttach}
+            >
+              关联工具
             </button>
           </div>
           <div className="agent-tool-list">
@@ -4259,30 +4506,12 @@ function AgentDetailPage({
                   />
                   <span>{tool.enabled ? "启用" : "停用"}</span>
                 </label>
-                <input
-                  value={tool.name}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      tools: item.tools.map((target) => (target.id === tool.id ? { ...target, name: event.target.value } : target)),
-                    }))
-                  }
-                  aria-label="工具名称"
-                />
-                <textarea
-                  value={tool.description}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      tools: item.tools.map((target) => (target.id === tool.id ? { ...target, description: event.target.value } : target)),
-                    }))
-                  }
-                  rows={2}
-                  aria-label="工具说明"
-                />
-                <button className="ghost-button compact danger-button" type="button" onClick={() => deleteAgentTool(tool.id)}>
-                  删除
+                <strong className="tool-name">{tool.name}</strong>
+                <p className="tool-desc">{tool.description}</p>
+                <button className="ghost-button compact danger-button" type="button" onClick={() => onDetachTool(agent.id, tool.id)}>
+                  移除
                 </button>
+                <small className="rule-source">来源：{tool.sourceToolId ? "统一工具库" : "历史关联"}</small>
               </div>
             ))}
           </div>
@@ -4429,62 +4658,76 @@ function AgentDetailPage({
             </button>
           </div>
           <div className="rule-list">
-            {agent.rules.map((rule) => (
-              <div className="rule-card editable-rule" key={rule.id}>
-                <label className="rule-switch">
-                  <input
-                    type="checkbox"
-                    checked={rule.enabled}
-                    onChange={() =>
-                      onUpdateAgentRule(agent.id, rule.id, {
-                        enabled: !rule.enabled,
-                      })
-                    }
-                  />
-                  <span>{rule.enabled ? "启用" : "停用"}</span>
-                </label>
-                <select
-                  value={rule.priority}
-                  onChange={(event) =>
-                    onUpdateAgentRule(agent.id, rule.id, {
-                      priority: event.target.value as "高" | "中" | "低",
-                    })
-                  }
-                  aria-label={`${rule.title} 优先级`}
-                >
-                  <option value="高">高</option>
-                  <option value="中">中</option>
-                  <option value="低">低</option>
-                </select>
-                <input
-                  value={rule.title}
-                  onChange={(event) =>
-                    onUpdateAgentRule(agent.id, rule.id, {
-                      title: event.target.value,
-                    })
-                  }
-                  aria-label="规则名称"
-                />
-                <textarea
-                  value={rule.description}
-                  onChange={(event) =>
-                    onUpdateAgentRule(agent.id, rule.id, {
-                      description: event.target.value,
-                    })
-                  }
-                  aria-label="规则说明"
-                  rows={2}
-                />
-                <button
-                  className="ghost-button compact danger-button"
-                  type="button"
-                  onClick={() => onDetachRule(agent.id, rule.id)}
-                >
-                  移除
-                </button>
-                <small className="rule-source">来源：{rule.sourceRuleId ? "统一规则库" : "本地规则"}</small>
-              </div>
-            ))}
+            {agent.rules.map((rule) => {
+              const isShared = !!rule.sourceRuleId;
+              return (
+                <div className={`rule-card editable-rule ${isShared ? "rule-shared" : "rule-draft"}`} key={rule.id}>
+                  <div className="rule-card-top">
+                    <label className="rule-switch">
+                      <input
+                        type="checkbox"
+                        checked={rule.enabled}
+                        onChange={() => onUpdateAgentRule(agent.id, rule.id, { enabled: !rule.enabled })}
+                      />
+                      <span>{rule.enabled ? "启用" : "停用"}</span>
+                    </label>
+                    <select
+                      value={rule.priority}
+                      onChange={(event) => onUpdateAgentRule(agent.id, rule.id, { priority: event.target.value as "高" | "中" | "低" })}
+                      aria-label={`${rule.title} 优先级`}
+                    >
+                      <option value="高">高</option>
+                      <option value="中">中</option>
+                      <option value="低">低</option>
+                    </select>
+                    <span className={`rule-isolation-badge ${isShared ? "badge-shared" : "badge-draft"}`}>
+                      {isShared ? "共享规则" : "私有草稿"}
+                    </span>
+                  </div>
+
+                  {isShared ? (
+                    <>
+                      <strong className="rule-title-readonly">{rule.title}</strong>
+                      <p className="rule-desc-readonly">{rule.description}</p>
+                    </>
+                  ) : (
+                    <>
+                      <input
+                        value={rule.title}
+                        onChange={(event) => onUpdateAgentRule(agent.id, rule.id, { title: event.target.value })}
+                        aria-label="规则名称"
+                      />
+                      <textarea
+                        value={rule.description}
+                        onChange={(event) => onUpdateAgentRule(agent.id, rule.id, { description: event.target.value })}
+                        aria-label="规则说明"
+                        rows={2}
+                      />
+                    </>
+                  )}
+
+                  <div className="rule-card-actions">
+                    {!isShared && (
+                      <button
+                        className="ghost-button compact"
+                        type="button"
+                        onClick={() => onPromoteRule(agent.id, rule.id)}
+                        title="提升为所有 Agent 均可引用的共享规则"
+                      >
+                        提升为共享规则
+                      </button>
+                    )}
+                    <button
+                      className="ghost-button compact danger-button"
+                      type="button"
+                      onClick={() => onDetachRule(agent.id, rule.id)}
+                    >
+                      移除
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
 
@@ -4521,18 +4764,26 @@ function AgentDetailPage({
                   <span>评测样例</span>
                 </div>
                 <div>
-                  <strong>{linkedDocs.length}</strong>
-                  <span>知识片段</span>
+                  <strong>{agent.testCases.filter((c) => c.split === "train").length}</strong>
+                  <span className="split-label">训练集</span>
                 </div>
                 <div>
-                  <strong>{enabledRules}</strong>
-                  <span>启用规则</span>
+                  <strong>{agent.testCases.filter((c) => c.split === "holdout").length}</strong>
+                  <span className="split-label">留出集</span>
                 </div>
                 <div>
                   <strong>{agentBlueprint.qualityTarget}</strong>
                   <span>质量门槛</span>
                 </div>
               </div>
+              {agent.judgePhase && (
+                <div className="judge-phase-row">
+                  <span className="judge-phase-label">Judge 校准阶段</span>
+                  <span className={`judge-phase-badge phase-${agent.judgePhase}`}>
+                    {agent.judgePhase === "human" ? "人工标注" : agent.judgePhase === "parallel" ? "平行验证" : "自动裁判"}
+                  </span>
+                </div>
+              )}
 
               <div className="training-actions">
                 <button
