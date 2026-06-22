@@ -3037,7 +3037,8 @@ textarea:focus {
 
 .trace-evaluation-panel .trace-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-content: start;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  align-content: stretch;
 }
 
 .trace-item {
