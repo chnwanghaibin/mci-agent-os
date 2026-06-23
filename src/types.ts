@@ -23,6 +23,7 @@ export interface RuleItem {
   description: string;
   priority: "高" | "中" | "低";
   enabled: boolean;
+  isolationType?: "binding" | "create" | "content";
 }
 
 export interface RuleLibraryItem {

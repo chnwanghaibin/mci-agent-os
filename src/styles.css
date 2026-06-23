@@ -4727,8 +4727,8 @@ textarea:focus {
 
 .anchor-field-row {
   display: grid;
-  grid-template-columns: 130px 90px 1fr 60px auto;
-  gap: 6px;
+  grid-template-columns: 110px 80px 1fr 1fr 52px auto;
+  gap: 5px;
   align-items: start;
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
@@ -4814,3 +4814,307 @@ textarea:focus {
 .skill-apply-select:hover {
   border-color: var(--green);
 }
+
+/* ── InstructionSegment label select ──────────────────────────────────────── */
+.segment-label-select {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.segment-label-select.segment-label-role { background: #eff6ff; color: #1d4ed8; }
+.segment-label-select.segment-label-task { background: #f0fdf4; color: #15803d; }
+.segment-label-select.segment-label-constraint { background: #fff7ed; color: #c2410c; }
+.segment-label-select.segment-label-output { background: #faf5ff; color: #7c3aed; }
+
+/* ── TestCase split toggle ─────────────────────────────────────────────────── */
+.case-split-toggle {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: none;
+  cursor: pointer;
+}
+.case-split-toggle.train { background: #eef5ff; color: #1d4ed8; }
+.case-split-toggle.holdout { background: #fff7ed; color: #c2410c; }
+.case-split-toggle:hover { opacity: 0.8; }
+
+/* ── WorkflowStep routing section ─────────────────────────────────────────── */
+.routing-section {
+  border-top: 1px dashed var(--line);
+  padding: 8px 14px 10px;
+  background: var(--surface-soft);
+}
+.routing-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+  margin-bottom: 6px;
+}
+.routing-section-head span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.routing-empty {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 0;
+}
+.routing-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.routing-condition {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: inherit;
+}
+.routing-arrow {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.routing-target {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+/* ── Skill card editing mode ───────────────────────────────────────────────── */
+.skill-card-editing {
+  border-color: #1d4ed8;
+  box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.12);
+}
+.skill-edit-name {
+  font-size: 14px;
+  font-weight: 700;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 8px;
+  flex: 1;
+}
+.skill-edit-version {
+  width: 70px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+.skill-edit-category {
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 6px;
+  background: var(--surface);
+}
+.skill-edit-desc {
+  width: 100%;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: inherit;
+  resize: none;
+  line-height: 1.5;
+  margin-top: 6px;
+}
+.skill-step-title-input {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.skill-step-desc-input {
+  width: 100%;
+  font-size: 12.5px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: inherit;
+  resize: none;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+.skill-anchor-editor {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.skill-anchor-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--surface-soft);
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+  border-bottom: 1px solid var(--line);
+}
+.skill-anchor-field-row {
+  display: grid;
+  grid-template-columns: 90px 70px 1fr 52px 1fr 1fr auto;
+  gap: 5px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+}
+.skill-anchor-field-row:last-child { border-bottom: none; }
+.skill-anchor-field-row input,
+.skill-anchor-field-row select {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  width: 100%;
+}
+
+/* ── judgePhase select ─────────────────────────────────────────────────────── */
+.judge-phase-select {
+  font-size: 12px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+.judge-phase-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+/* ── Retrieval config panel ────────────────────────────────────────────────── */
+.retrieval-config-panel {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 10px 0 8px;
+  background: var(--surface-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.retrieval-config-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.retrieval-config-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+  width: 58px;
+  flex-shrink: 0;
+}
+.retrieval-topk-input {
+  width: 70px;
+  font-size: 13px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: inherit;
+}
+.retrieval-tags-input {
+  flex: 1;
+  font-size: 12px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: inherit;
+}
+
+/* ── rule isolation select (draft cards) ──────────────────────────────────── */
+.rule-isolation-select {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: #fffbeb;
+  color: #92400e;
+  cursor: pointer;
+}
+
+/* ── inputSchema / outputSchema tag editor ────────────────────────────────── */
+.schema-editor-block {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.schema-tag-editor {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.schema-tag-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+  width: 56px;
+  flex-shrink: 0;
+  padding-top: 4px;
+}
+.schema-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  flex: 1;
+}
+.schema-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: #eef5ff;
+  color: #1d4ed8;
+  border: 1px solid #c7dcff;
+}
+.schema-tag button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #1d4ed8;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.6;
+}
+.schema-tag button:hover { opacity: 1; }
+.schema-tag-input {
+  font-size: 12px;
+  padding: 2px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 20px;
+  min-width: 90px;
+  font-family: inherit;
+  outline: none;
+}
+.schema-tag-input:focus { border-color: #1d4ed8; }

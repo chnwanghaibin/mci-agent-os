@@ -1842,6 +1842,16 @@ export default function App() {
               }));
               notify("Skill 已创建");
             }}
+            onUpdateSkill={(skillId, patch) => {
+              setState((s) => ({
+                ...s,
+                skills: s.skills.map((sk) => sk.id === skillId ? { ...sk, ...patch, updatedAt: nowLabel() } : sk),
+              }));
+            }}
+            onDeleteSkill={(skillId) => {
+              setState((s) => ({ ...s, skills: s.skills.filter((sk) => sk.id !== skillId) }));
+              notify("Skill 已删除");
+            }}
           />
         )}
 
@@ -3648,31 +3658,92 @@ function AnchorFieldBadge({ field }: { field: import("./types").AnchorField }) {
   );
 }
 
-function SkillCard({ skill }: { skill: import("./types").Skill }) {
+function SkillCard({
+  skill,
+  onUpdate,
+  onDelete,
+}: {
+  skill: import("./types").Skill;
+  onUpdate: (patch: Partial<import("./types").Skill>) => void;
+  onDelete: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
   const totalFields = skill.steps.reduce((sum, s) => sum + (s.anchor?.fields.length ?? 0), 0);
 
-  const categoryColor: Record<string, string> = {
-    合规: "#7c3aed",
-    风控: "#dc2626",
-    运维: "#2563eb",
-    通用: "#6b7280",
+  const categoryColor: Record<string, string> = { 合规: "#7c3aed", 风控: "#dc2626", 运维: "#2563eb", 通用: "#6b7280" };
+  const catColor = categoryColor[skill.category] ?? "#6b7280";
+
+  const updateStep = (idx: number, patch: Partial<import("./types").SkillStep>) => {
+    const steps = skill.steps.map((s, i) => (i === idx ? { ...s, ...patch } : s));
+    onUpdate({ steps });
   };
-  const cat = skill.category;
-  const catColor = categoryColor[cat] ?? "#6b7280";
+
+  const addSkillStep = () => {
+    onUpdate({ steps: [...skill.steps, { title: "新步骤", description: "", anchor: { strict: true, fields: [] } }] });
+  };
+
+  const removeSkillStep = (idx: number) => {
+    onUpdate({ steps: skill.steps.filter((_, i) => i !== idx) });
+  };
+
+  const addSkillAnchorField = (stepIdx: number) => {
+    const step = skill.steps[stepIdx];
+    const newField: import("./types").AnchorField = { id: `skf-${Date.now()}`, key: "新字段", type: "text", required: true, description: "" };
+    updateStep(stepIdx, { anchor: { strict: step.anchor?.strict ?? true, fields: [...(step.anchor?.fields ?? []), newField] } });
+  };
+
+  const removeSkillAnchorField = (stepIdx: number, fieldId: string) => {
+    const step = skill.steps[stepIdx];
+    updateStep(stepIdx, { anchor: { ...step.anchor!, fields: step.anchor!.fields.filter((f) => f.id !== fieldId) } });
+  };
+
+  const updateSkillAnchorField = (stepIdx: number, fieldId: string, patch: Partial<import("./types").AnchorField>) => {
+    const step = skill.steps[stepIdx];
+    updateStep(stepIdx, { anchor: { ...step.anchor!, fields: step.anchor!.fields.map((f) => f.id === fieldId ? { ...f, ...patch } : f) } });
+  };
 
   return (
-    <div className="skill-card">
+    <div className={`skill-card ${editing ? "skill-card-editing" : ""}`}>
       <div className="skill-card-header">
         <div className="skill-card-title-row">
-          <span className="skill-card-name">{skill.name}</span>
-          <span className="skill-version-badge">{skill.version}</span>
-          <span
-            className="skill-category-badge"
-            style={{ background: catColor + "18", color: catColor, border: `1px solid ${catColor}30` }}
-          >
-            {skill.category}
-          </span>
+          {editing ? (
+            <>
+              <input
+                className="skill-edit-name"
+                value={skill.name}
+                onChange={(e) => onUpdate({ name: e.target.value })}
+                placeholder="Skill 名称"
+              />
+              <input
+                className="skill-edit-version"
+                value={skill.version}
+                onChange={(e) => onUpdate({ version: e.target.value })}
+                placeholder="v1.0"
+              />
+              <select
+                className="skill-edit-category"
+                value={skill.category}
+                onChange={(e) => onUpdate({ category: e.target.value })}
+              >
+                {["合规", "风控", "运维", "通用"].map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </>
+          ) : (
+            <>
+              <span className="skill-card-name">{skill.name}</span>
+              <span className="skill-version-badge">{skill.version}</span>
+              <span className="skill-category-badge" style={{ background: catColor + "18", color: catColor, border: `1px solid ${catColor}30` }}>
+                {skill.category}
+              </span>
+            </>
+          )}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <button className="ghost-button compact" type="button" onClick={() => setEditing((v) => !v)}>
+              {editing ? "完成" : "编辑"}
+            </button>
+            <button className="ghost-button compact danger-button" type="button" onClick={onDelete}>删除</button>
+          </div>
         </div>
         <div className="skill-card-meta">
           <span>{skill.steps.length} 步骤</span>
@@ -3683,15 +3754,27 @@ function SkillCard({ skill }: { skill: import("./types").Skill }) {
           <span>·</span>
           <span>更新于 {skill.updatedAt}</span>
         </div>
-        <p className="skill-card-desc">{skill.description}</p>
-        <button
-          className="ghost-button compact"
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          style={{ marginTop: 4, fontSize: 12 }}
-        >
-          {expanded ? "收起步骤 ▲" : `展开步骤 (${skill.steps.length}) ▼`}
-        </button>
+        {editing ? (
+          <textarea
+            className="skill-edit-desc"
+            value={skill.description}
+            rows={2}
+            onChange={(e) => onUpdate({ description: e.target.value })}
+            placeholder="Skill 用途和适用场景"
+          />
+        ) : (
+          <p className="skill-card-desc">{skill.description}</p>
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+          <button className="ghost-button compact" type="button" onClick={() => setExpanded((v) => !v)} style={{ fontSize: 12 }}>
+            {expanded ? "收起步骤 ▲" : `展开步骤 (${skill.steps.length}) ▼`}
+          </button>
+          {editing && (
+            <button className="ghost-button compact" type="button" onClick={addSkillStep} style={{ fontSize: 12 }}>
+              <Plus size={12} /> 添加步骤
+            </button>
+          )}
+        </div>
       </div>
       {expanded && (
         <div className="skill-steps-list">
@@ -3699,29 +3782,98 @@ function SkillCard({ skill }: { skill: import("./types").Skill }) {
             <div key={i} className="skill-step-row">
               <div className="skill-step-index">{i + 1}</div>
               <div className="skill-step-body">
-                <div className="skill-step-title">{step.title}</div>
-                <div className="skill-step-desc">{step.description}</div>
-                {step.anchor && step.anchor.fields.length > 0 && (
-                  <div className="skill-step-anchor">
-                    <span className="anchor-label">输出锚点{step.anchor.strict ? "（严格）" : ""}：</span>
-                    <div className="anchor-field-badges">
-                      {step.anchor.fields.map((f) => (
-                        <AnchorFieldBadge key={f.id} field={f} />
+                {editing ? (
+                  <>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                      <input
+                        className="skill-step-title-input"
+                        value={step.title}
+                        onChange={(e) => updateStep(i, { title: e.target.value })}
+                        placeholder="步骤名称"
+                      />
+                      <button className="ghost-button compact danger-button" type="button" onClick={() => removeSkillStep(i)}>
+                        <X size={12} />
+                      </button>
+                    </div>
+                    <textarea
+                      className="skill-step-desc-input"
+                      value={step.description}
+                      rows={2}
+                      onChange={(e) => updateStep(i, { description: e.target.value })}
+                      placeholder="步骤描述（SOP 说明）"
+                    />
+                    <div className="skill-anchor-editor">
+                      <div className="skill-anchor-head">
+                        <span>输出锚点字段</span>
+                        <label className="anchor-strict-toggle">
+                          <input
+                            type="checkbox"
+                            checked={step.anchor?.strict ?? true}
+                            onChange={(e) => updateStep(i, { anchor: { ...(step.anchor ?? { fields: [] }), strict: e.target.checked } })}
+                          />
+                          严格模式
+                        </label>
+                        <button className="ghost-button compact" type="button" onClick={() => addSkillAnchorField(i)} style={{ fontSize: 11 }}>
+                          <Plus size={11} /> 添加字段
+                        </button>
+                      </div>
+                      {(step.anchor?.fields ?? []).map((f) => (
+                        <div className="skill-anchor-field-row" key={f.id}>
+                          <input value={f.key} placeholder="字段名" onChange={(e) => updateSkillAnchorField(i, f.id, { key: e.target.value })} />
+                          <select value={f.type} onChange={(e) => updateSkillAnchorField(i, f.id, { type: e.target.value as import("./types").AnchorField["type"] })}>
+                            <option value="enum">enum</option>
+                            <option value="bool">bool</option>
+                            <option value="text">text</option>
+                            <option value="number">number</option>
+                            <option value="list">list</option>
+                          </select>
+                          {f.type === "enum" && (
+                            <input
+                              value={f.options?.join(",") ?? ""}
+                              placeholder="选项A,B"
+                              onChange={(e) => updateSkillAnchorField(i, f.id, { options: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
+                            />
+                          )}
+                          <label className="anchor-required">
+                            <input type="checkbox" checked={f.required} onChange={(e) => updateSkillAnchorField(i, f.id, { required: e.target.checked })} />
+                            必填
+                          </label>
+                          <input value={f.description} placeholder="含义说明" onChange={(e) => updateSkillAnchorField(i, f.id, { description: e.target.value })} />
+                          <input
+                            value={f.constraint ?? ""}
+                            placeholder="跨字段约束（选填）"
+                            onChange={(e) => updateSkillAnchorField(i, f.id, { constraint: e.target.value || undefined })}
+                          />
+                          <button className="ghost-button compact danger-button" type="button" onClick={() => removeSkillAnchorField(i, f.id)}>
+                            <X size={11} />
+                          </button>
+                        </div>
                       ))}
                     </div>
-                    {step.anchor.fields.some((f) => f.constraint) && (
-                      <div className="anchor-constraints">
-                        {step.anchor.fields
-                          .filter((f) => f.constraint)
-                          .map((f) => (
-                            <div key={f.id} className="anchor-constraint-row">
-                              <span className="anchor-constraint-key">{f.key}：</span>
-                              <span className="anchor-constraint-val">{f.constraint}</span>
-                            </div>
-                          ))}
+                  </>
+                ) : (
+                  <>
+                    <div className="skill-step-title">{step.title}</div>
+                    <div className="skill-step-desc">{step.description}</div>
+                    {step.anchor && step.anchor.fields.length > 0 && (
+                      <div className="skill-step-anchor">
+                        <span className="anchor-label">输出锚点{step.anchor.strict ? "（严格）" : ""}：</span>
+                        <div className="anchor-field-badges">
+                          {step.anchor.fields.map((f) => <AnchorFieldBadge key={f.id} field={f} />)}
+                        </div>
+                        {step.anchor.fields.some((f) => f.constraint) && (
+                          <div className="anchor-constraints">
+                            {step.anchor.fields.filter((f) => f.constraint).map((f) => (
+                              <div key={f.id} className="anchor-constraint-row">
+                                <span className="anchor-constraint-key">{f.key}：</span>
+                                <span className="anchor-constraint-val">{f.constraint}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
-                  </div>
+                  </>
                 )}
               </div>
             </div>
@@ -3735,9 +3887,13 @@ function SkillCard({ skill }: { skill: import("./types").Skill }) {
 function SkillLibraryPage({
   skills,
   onCreateSkill,
+  onUpdateSkill,
+  onDeleteSkill,
 }: {
   skills: import("./types").Skill[];
   onCreateSkill: () => void;
+  onUpdateSkill: (skillId: string, patch: Partial<import("./types").Skill>) => void;
+  onDeleteSkill: (skillId: string) => void;
 }) {
   const [filter, setFilter] = useState("");
   const filtered = skills.filter(
@@ -3804,7 +3960,12 @@ function SkillLibraryPage({
       ) : (
         <div className="skill-card-list">
           {filtered.map((skill) => (
-            <SkillCard key={skill.id} skill={skill} />
+            <SkillCard
+              key={skill.id}
+              skill={skill}
+              onUpdate={(patch) => onUpdateSkill(skill.id, patch)}
+              onDelete={() => onDeleteSkill(skill.id)}
+            />
           ))}
         </div>
       )}
@@ -4175,6 +4336,36 @@ function ApiCenterPage({
   );
 }
 
+function SchemaTagEditor({ label, tags, onChange }: { label: string; tags: string[]; onChange: (tags: string[]) => void }) {
+  const [input, setInput] = useState("");
+  const add = () => {
+    const val = input.trim();
+    if (val && !tags.includes(val)) { onChange([...tags, val]); }
+    setInput("");
+  };
+  return (
+    <div className="schema-tag-editor">
+      <span className="schema-tag-label">{label}</span>
+      <div className="schema-tags">
+        {tags.map((tag) => (
+          <span key={tag} className="schema-tag">
+            {tag}
+            <button type="button" onClick={() => onChange(tags.filter((t) => t !== tag))}>×</button>
+          </span>
+        ))}
+        <input
+          className="schema-tag-input"
+          value={input}
+          placeholder="新增字段…"
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+        />
+        <button className="ghost-button compact" type="button" onClick={add}>+</button>
+      </div>
+    </div>
+  );
+}
+
 function AgentDetailPage({
   agent,
   docs,
@@ -4229,7 +4420,7 @@ function AgentDetailPage({
   skills: Skill[];
 }) {
   const [feedbackScore, setFeedbackScore] = useState(agent.feedbackScore ?? 5);
-  const [feedbackNote, setFeedbackNote] = useState(agent.feedbackNote ?? "输出建议更具体，适合纳入下一轮优化。");
+  const [feedbackNote, setFeedbackNote] = useState(agent.feedbackNote ?? "");
   const [publishWork, setPublishWork] = useState(agent.matrixCellKey?.split(":")[0] ?? "contractual");
   const [publishFunc, setPublishFunc] = useState(agent.matrixCellKey?.split(":")[1] ?? "contract-registrar");
   const [ruleToAttach, setRuleToAttach] = useState(ruleLibrary[0]?.id ?? "");
@@ -4240,7 +4431,7 @@ function AgentDetailPage({
 
   useEffect(() => {
     setFeedbackScore(agent.feedbackScore ?? 5);
-    setFeedbackNote(agent.feedbackNote ?? "输出建议更具体，适合纳入下一轮优化。");
+    setFeedbackNote(agent.feedbackNote ?? "");
     setPublishWork(agent.matrixCellKey?.split(":")[0] ?? "contractual");
     setPublishFunc(agent.matrixCellKey?.split(":")[1] ?? "contract-registrar");
   }, [agent.id, agent.feedbackNote, agent.feedbackScore, agent.matrixCellKey]);
@@ -4329,6 +4520,39 @@ function AgentDetailPage({
       ...item,
       workflow: item.workflow.map((s) =>
         s.id !== stepId ? s : { ...s, anchor: { ...s.anchor!, fields: s.anchor!.fields.map((f) => f.id === fieldId ? { ...f, ...patch } : f) } },
+      ),
+    }));
+  };
+
+  const addRoutingRule = (stepId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : {
+          ...s,
+          routing: [...(s.routing ?? []), { id: `rt-${Date.now()}`, condition: "", nextStepId: "" }],
+        },
+      ),
+    }));
+  };
+
+  const removeRoutingRule = (stepId: string, ruleId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : { ...s, routing: (s.routing ?? []).filter((r) => r.id !== ruleId) },
+      ),
+    }));
+  };
+
+  const updateRoutingRule = (stepId: string, ruleId: string, patch: { condition?: string; nextStepId?: string }) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : {
+          ...s,
+          routing: (s.routing ?? []).map((r) => r.id === ruleId ? { ...r, ...patch } : r),
+        },
       ),
     }));
   };
@@ -4616,6 +4840,18 @@ function AgentDetailPage({
             <span>案例</span>
             <strong>{agent.caseUploaded ? "已上传模拟案例" : "待上传模拟案例"}</strong>
           </div>
+          <div className="schema-editor-block">
+            <SchemaTagEditor
+              label="输入字段"
+              tags={agent.inputSchema ?? []}
+              onChange={(tags) => onUpdateAgent(agent.id, (item) => ({ ...item, inputSchema: tags }))}
+            />
+            <SchemaTagEditor
+              label="输出字段"
+              tags={agent.outputSchema ?? []}
+              onChange={(tags) => onUpdateAgent(agent.id, (item) => ({ ...item, outputSchema: tags }))}
+            />
+          </div>
         </section>
 
         <div className={paneClass("detail-prompt", "detail-block-heading span-2")}>
@@ -4642,9 +4878,23 @@ function AgentDetailPage({
               {(agent.instructionSegments ?? []).map((seg) => (
                 <div className="instruction-segment-card" key={seg.id}>
                   <div className="segment-label-row">
-                    <span className={`segment-label segment-label-${seg.label === "角色" ? "role" : seg.label === "任务" ? "task" : seg.label === "约束" ? "constraint" : "output"}`}>
-                      {seg.label}
-                    </span>
+                    <select
+                      className={`segment-label-select segment-label-${seg.label === "角色" ? "role" : seg.label === "任务" ? "task" : seg.label === "约束" ? "constraint" : "output"}`}
+                      value={seg.label}
+                      onChange={(e) =>
+                        onUpdateAgent(agent.id, (item) => ({
+                          ...item,
+                          instructionSegments: (item.instructionSegments ?? []).map((s) =>
+                            s.id === seg.id ? { ...s, label: e.target.value as InstructionSegment["label"] } : s,
+                          ),
+                        }))
+                      }
+                    >
+                      <option value="角色">角色</option>
+                      <option value="任务">任务</option>
+                      <option value="约束">约束</option>
+                      <option value="输出格式">输出格式</option>
+                    </select>
                     <button className="ghost-button compact danger-button" type="button" onClick={() => deleteInstructionSegment(seg.id)}>
                       删除
                     </button>
@@ -4984,6 +5234,12 @@ function AgentDetailPage({
                             placeholder="字段含义说明"
                             onChange={(e) => updateAnchorField(step.id, field.id, { description: e.target.value })}
                           />
+                          <input
+                            className="anchor-field-constraint"
+                            value={field.constraint ?? ""}
+                            placeholder="跨字段约束（选填）"
+                            onChange={(e) => updateAnchorField(step.id, field.id, { constraint: e.target.value || undefined })}
+                          />
                           <button
                             className="ghost-button compact danger-button"
                             type="button"
@@ -4999,6 +5255,49 @@ function AgentDetailPage({
                       </button>
                     </div>
                   )}
+
+                  {/* Routing Rules */}
+                  <div className="routing-section">
+                    <div className="routing-section-head">
+                      <span>
+                        <ArrowRight size={13} />
+                        路由规则
+                      </span>
+                      <button className="ghost-button compact" type="button" onClick={() => addRoutingRule(step.id)}>
+                        <Plus size={13} />
+                        添加路由
+                      </button>
+                    </div>
+                    {(step.routing ?? []).length === 0 ? (
+                      <p className="routing-empty">无路由规则（步骤按顺序执行）</p>
+                    ) : (
+                      (step.routing ?? []).map((rt) => (
+                        <div className="routing-rule-row" key={rt.id}>
+                          <input
+                            className="routing-condition"
+                            value={rt.condition}
+                            placeholder="触发条件（如 risk_level=高）"
+                            onChange={(e) => updateRoutingRule(step.id, rt.id, { condition: e.target.value })}
+                          />
+                          <ArrowRight size={13} className="routing-arrow" />
+                          <select
+                            className="routing-target"
+                            value={rt.nextStepId}
+                            onChange={(e) => updateRoutingRule(step.id, rt.id, { nextStepId: e.target.value })}
+                          >
+                            <option value="">→ 下一步（默认）</option>
+                            {agent.workflow.filter((s) => s.id !== step.id).map((s, i) => (
+                              <option key={s.id} value={s.id}>→ 步骤 {i + 1}：{s.title}</option>
+                            ))}
+                            <option value="__end__">→ 终止流程</option>
+                          </select>
+                          <button className="ghost-button compact danger-button" type="button" onClick={() => removeRoutingRule(step.id, rt.id)}>
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -5029,6 +5328,41 @@ function AgentDetailPage({
                 <span>{doc.title}</span>
               </label>
             ))}
+          </div>
+          <div className="retrieval-config-panel">
+            <div className="retrieval-config-row">
+              <label className="retrieval-config-label">Top-K</label>
+              <input
+                type="number"
+                className="retrieval-topk-input"
+                min={1}
+                max={20}
+                value={agent.retrievalConfig?.topK ?? 4}
+                onChange={(e) =>
+                  onUpdateAgent(agent.id, (item) => ({
+                    ...item,
+                    retrievalConfig: { ...(item.retrievalConfig ?? { tagFilters: [] }), topK: Math.max(1, Number(e.target.value)) },
+                  }))
+                }
+              />
+            </div>
+            <div className="retrieval-config-row">
+              <label className="retrieval-config-label">标签过滤</label>
+              <input
+                className="retrieval-tags-input"
+                value={(agent.retrievalConfig?.tagFilters ?? []).join(",")}
+                placeholder="标签A,标签B（逗号分隔）"
+                onChange={(e) =>
+                  onUpdateAgent(agent.id, (item) => ({
+                    ...item,
+                    retrievalConfig: {
+                      ...(item.retrievalConfig ?? { topK: 4 }),
+                      tagFilters: e.target.value.split(",").map((t) => t.trim()).filter(Boolean),
+                    },
+                  }))
+                }
+              />
+            </div>
           </div>
           <button className="ghost-button compact" type="button" onClick={onOpenKnowledge}>
             查看统一知识库
@@ -5082,9 +5416,19 @@ function AgentDetailPage({
                       <option value="中">中</option>
                       <option value="低">低</option>
                     </select>
-                    <span className={`rule-isolation-badge ${isShared ? "badge-shared" : "badge-draft"}`}>
-                      {isShared ? "共享规则" : "私有草稿"}
-                    </span>
+                    {isShared ? (
+                      <span className="rule-isolation-badge badge-shared">共享规则</span>
+                    ) : (
+                      <select
+                        className="rule-isolation-select"
+                        value={rule.isolationType ?? "create"}
+                        onChange={(e) => onUpdateAgentRule(agent.id, rule.id, { isolationType: e.target.value as RuleItem["isolationType"] })}
+                        title="草稿规则的隔离类型"
+                      >
+                        <option value="create">新建草稿</option>
+                        <option value="content">内容变更申请</option>
+                      </select>
+                    )}
                   </div>
 
                   {isShared ? (
@@ -5178,14 +5522,25 @@ function AgentDetailPage({
                   <span>质量门槛</span>
                 </div>
               </div>
-              {agent.judgePhase && (
-                <div className="judge-phase-row">
-                  <span className="judge-phase-label">Judge 校准阶段</span>
+              <div className="judge-phase-row">
+                <span className="judge-phase-label">Judge 校准阶段</span>
+                <select
+                  className="judge-phase-select"
+                  value={agent.judgePhase ?? "human"}
+                  onChange={(e) =>
+                    onUpdateAgent(agent.id, (item) => ({ ...item, judgePhase: e.target.value as Agent["judgePhase"] }))
+                  }
+                >
+                  <option value="human">人工标注（前 20 条）</option>
+                  <option value="parallel">平行验证（20-50 条）</option>
+                  <option value="auto">自动裁判（50+ 条）</option>
+                </select>
+                {agent.judgePhase && (
                   <span className={`judge-phase-badge phase-${agent.judgePhase}`}>
                     {agent.judgePhase === "human" ? "人工标注" : agent.judgePhase === "parallel" ? "平行验证" : "自动裁判"}
                   </span>
-                </div>
-              )}
+                )}
+              </div>
 
               <div className="training-actions">
                 <button
@@ -5423,11 +5778,21 @@ function AgentDetailPage({
                     <option value="待验证">待验证</option>
                     <option value="需优化">需优化</option>
                   </select>
-                  {testCase.split && (
-                    <span className={`case-split-badge ${testCase.split === "holdout" ? "holdout" : ""}`}>
-                      {testCase.split === "train" ? "训练集" : "留出集"}
-                    </span>
-                  )}
+                  <button
+                    className={`case-split-toggle ${testCase.split === "holdout" ? "holdout" : "train"}`}
+                    type="button"
+                    title="点击切换训练集/留出集"
+                    onClick={() =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        testCases: item.testCases.map((t) =>
+                          t.id === testCase.id ? { ...t, split: t.split === "holdout" ? "train" : "holdout" } : t,
+                        ),
+                      }))
+                    }
+                  >
+                    {testCase.split === "holdout" ? "留出集" : "训练集"}
+                  </button>
                 </div>
                 <input
                   value={testCase.name}
