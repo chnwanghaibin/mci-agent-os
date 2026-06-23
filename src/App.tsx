@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Bot,
@@ -7,8 +8,10 @@ import {
   Code2,
   Copy,
   Database,
+  Edit3,
   FileText,
   Filter,
+  GitCompare,
   Grid3X3,
   Layers3,
   PlayCircle,
@@ -23,14 +26,16 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
   Upload,
   Wrench,
   X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { cellKey, defaultState, functionalFlows, workFlows } from "./data";
-import type { Agent, AgentStatus, ApiKeyRecord, AppState, EvalRun, KnowledgeDoc, RuleItem, RuleLibraryItem, ToolAsset, ViewName } from "./types";
+import { cellKey, defaultState, functionalFlows, skills as defaultSkills, workFlows } from "./data";
+import type { Agent, AgentStatus, AnchorField, ApiKeyRecord, AppState, EvalRun, FailureCluster, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RubricCriterion, RuleItem, RuleLibraryItem, Skill, ToolAsset, ViewName } from "./types";
 
 const STORAGE_KEY = "dgt-agent-platform-demo";
 
@@ -42,34 +47,29 @@ const statusCopy: Record<AgentStatus, string> = {
 
 const trainingStepCatalog = [
   {
-    title: "样例集入库",
-    description: "载入标准案例、反例、预期输出和人工反馈样本，建立本轮训练基线。",
-    system: "Dataset Orchestrator",
-  },
-  {
-    title: "知识检索校准",
-    description: "检查关联知识库覆盖度、片段召回和业务标签命中，修正检索优先级。",
-    system: "Retrieval Evaluator",
-  },
-  {
-    title: "规则边界验证",
-    description: "逐条验证启用规则、优先级、人工复核条件和低置信度处理边界。",
-    system: "Rule Guardrail Engine",
-  },
-  {
-    title: "工具链 Dry-run",
-    description: "模拟调用知识检索、规则校验、报告生成、路由和人工复核工具。",
-    system: "Tool Runtime Sandbox",
-  },
-  {
-    title: "回归评测",
-    description: "运行测试用例库，比较训练前后输出质量、通过率和失败用例原因。",
+    title: "基线评估",
+    description: "在训练集和留出集上运行当前版本，按 Rubric 各维度计算基线分和失败用例列表。",
     system: "Evaluation Harness",
   },
   {
-    title: "生成版本报告",
-    description: "固化版本号、质量分、改动摘要、风险项和下一轮优化建议。",
-    system: "Version Reporter",
+    title: "失败聚类",
+    description: "对失败用例进行语义聚类，将零散失败归纳成有意义的失败主题，用于精准定向提案。",
+    system: "Cluster Analyzer",
+  },
+  {
+    title: "根因诊断",
+    description: "Critic 模型分析每个失败主题的根本原因，定位到具体的白盒配置单元缺失。",
+    system: "Critic Model",
+  },
+  {
+    title: "生成改动提案",
+    description: "Proposer 针对每个失败主题，生成指向白盒单元的改动 diff，附诊断理由和风险评分。",
+    system: "Proposer Model",
+  },
+  {
+    title: "提案质量过滤",
+    description: "Critic 过滤低质量、重复或高风险提案，标注依赖关系，输出最终审查列表。",
+    system: "Critic Filter",
   },
 ];
 const trainingSteps = trainingStepCatalog.map((step) => step.title);
@@ -126,6 +126,23 @@ type TrainingRunState = {
   startedAt: string;
   completed: boolean;
   result: TrainingRunResult;
+  proposals: Proposal[];
+  clusters: FailureCluster[];
+};
+
+type ProposalReviewState = {
+  agentId: string;
+  proposals: Proposal[];
+  clusters: FailureCluster[];
+  phase: "review" | "gating" | "done";
+  gateResult: {
+    passed: boolean;
+    trainDelta: number;
+    holdoutDelta: number;
+    holdoutCount: number;
+    autoRejectedIds: string[];
+  } | null;
+  trainingResult: TrainingRunResult;
 };
 
 type EvaluationRunResult = {
@@ -191,16 +208,59 @@ const agentBlueprints: AgentBlueprint[] = [
       "你是滴灌通合同审查 Agent。请基于统一知识库、合同规则和业务上下文审查合同，必须输出风险等级、命中规则、修改建议和是否需要人工复核。不得生成未经验证的法律结论。",
     guardrails: ["高风险条款必须触发人工复核", "不得引用未关联知识库", "输出必须包含风险等级和修改建议", "不确定时给出缺失字段清单"],
     tools: [
-      { id: "search", name: "知识检索", description: "检索合同审查标准、现金流资产规则和披露清单。", enabled: true },
-      { id: "rule", name: "规则校验", description: "逐条命中收益分配、终止条款、数据授权等规则。", enabled: true },
-      { id: "report", name: "报告生成", description: "生成风险等级、修改建议和审查结论。", enabled: true },
-      { id: "handoff", name: "人工复核", description: "高风险或低置信度条款进入人工复核队列。", enabled: true },
+      { id: "search", sourceToolId: "tool-knowledge-search", name: "知识检索", description: "检索合同审查标准、现金流资产规则和披露清单。", enabled: true },
+      { id: "rule", sourceToolId: "tool-rule-check", name: "规则校验", description: "逐条命中收益分配、终止条款、数据授权等规则。", enabled: true },
+      { id: "report", sourceToolId: "tool-report", name: "报告生成", description: "生成风险等级、修改建议和审查结论。", enabled: true },
+      { id: "handoff", sourceToolId: "tool-human-review", name: "人工复核", description: "高风险或低置信度条款进入人工复核队列。", enabled: true },
     ],
     workflow: [
-      { id: "w1", title: "解析合同材料", description: "抽取主体、收益口径、终止条款、授权范围和附件版本。", enabled: true },
-      { id: "w2", title: "检索业务标准", description: "按节点、条款类型和标签检索统一知识库。", enabled: true },
-      { id: "w3", title: "执行规则校验", description: "对收益分配、披露一致性、提前终止、争议处理逐项打标。", enabled: true },
-      { id: "w4", title: "生成审查报告", description: "输出风险、证据、修改建议和人工复核建议。", enabled: true },
+      {
+        id: "w1", title: "解析合同材料", description: "抽取主体、收益口径、终止条款、授权范围和附件版本。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w1f1", key: "contract_type", type: "enum", options: ["现金流收益权", "融资租赁", "供应链票据", "其他"], required: true, description: "合同类型" },
+            { id: "w1f2", key: "parties", type: "list", required: true, description: "合同各方主体名称列表" },
+            { id: "w1f3", key: "key_clauses", type: "list", required: true, description: "提取到的关键条款列表（收益分配/终止/授权等）" },
+            { id: "w1f4", key: "doc_version", type: "text", required: false, description: "合同/披露材料版本号" },
+          ],
+        },
+      },
+      {
+        id: "w2", title: "检索业务标准", description: "按节点、条款类型和标签检索统一知识库。", enabled: true,
+        anchor: {
+          strict: false,
+          fields: [
+            { id: "w2f1", key: "matched_docs", type: "list", required: true, description: "命中知识库文档 ID 列表" },
+            { id: "w2f2", key: "relevance", type: "enum", options: ["高", "中", "低"], required: true, description: "整体检索相关性评级" },
+            { id: "w2f3", key: "coverage_gap", type: "bool", required: true, description: "是否存在知识库未覆盖的条款类型" },
+          ],
+        },
+      },
+      {
+        id: "w3", title: "执行规则校验", description: "对收益分配、披露一致性、提前终止、争议处理逐项打标。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w3f1", key: "violated_rules", type: "list", required: true, description: "命中的规则 ID 和名称列表" },
+            { id: "w3f2", key: "risk_level", type: "enum", options: ["低", "中", "高"], required: true, description: "综合规则校验后的风险等级" },
+            { id: "w3f3", key: "requires_human_review", type: "bool", required: true, description: "是否需要进入人工复核队列", constraint: "若 risk_level=高 则必须为 true" },
+          ],
+        },
+      },
+      {
+        id: "w4", title: "生成审查报告", description: "输出风险、证据、修改建议和人工复核建议。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w4f1", key: "conclusion", type: "enum", options: ["通过", "需关注", "拒绝"], required: true, description: "最终审查结论" },
+            { id: "w4f2", key: "risk_level", type: "enum", options: ["低", "中", "高"], required: true, description: "最终风险等级" },
+            { id: "w4f3", key: "modification_suggestions", type: "list", required: true, description: "具体修改建议列表，每条一句话" },
+            { id: "w4f4", key: "human_review_points", type: "list", required: false, description: "需人工核实的疑点清单" },
+            { id: "w4f5", key: "human_review_required", type: "bool", required: true, description: "是否提交人工复核" },
+          ],
+        },
+      },
     ],
     testCases: [
       {
@@ -209,6 +269,7 @@ const agentBlueprints: AgentBlueprint[] = [
         input: "合同约定按经营收入分配，但未说明扣除项和周期。",
         expected: "识别为高风险，要求补充扣除项、分配周期和披露一致性。",
         status: "待验证",
+        split: "train" as const,
       },
       {
         id: "tc-contract-termination",
@@ -216,6 +277,7 @@ const agentBlueprints: AgentBlueprint[] = [
         input: "发行方可单方提前终止且未写投资者保护安排。",
         expected: "命中提前终止规则，建议人工复核。",
         status: "待验证",
+        split: "holdout" as const,
       },
     ],
     trace: ["解析合同输入", "检索合同审查标准", "命中收益分配规则", "调用报告生成", "输出人工复核建议"],
@@ -256,16 +318,56 @@ const agentBlueprints: AgentBlueprint[] = [
       "你是系统工单分诊 Agent。请根据工单影响范围、业务环节和结算影响输出分类、优先级、责任团队和处理摘要。P0/P1 必须提示人工确认。",
     guardrails: ["不得承诺修复时间", "P0/P1 必须人工确认", "责任团队必须来自已配置范围"],
     tools: [
-      { id: "classify", name: "工单分类", description: "识别 COP、结算、门店数据、账户权限等问题类型。", enabled: true },
-      { id: "route", name: "责任方路由", description: "根据业务域和影响范围推荐处理团队。", enabled: true },
-      { id: "sla", name: "优先级判断", description: "结合现金流影响、门店范围和阻塞程度给出 P 级。", enabled: true },
-      { id: "summary", name: "摘要生成", description: "将原始工单改写为可执行处理摘要。", enabled: true },
+      { id: "classify", sourceToolId: "tool-knowledge-search", name: "工单分类", description: "识别 COP、结算、门店数据、账户权限等问题类型。", enabled: true },
+      { id: "route", sourceToolId: "tool-ticket-route", name: "责任方路由", description: "根据业务域和影响范围推荐处理团队。", enabled: true },
+      { id: "sla", sourceToolId: "tool-rule-check", name: "优先级判断", description: "结合现金流影响、门店范围和阻塞程度给出 P 级。", enabled: true },
+      { id: "summary", sourceToolId: "tool-report", name: "摘要生成", description: "将原始工单改写为可执行处理摘要。", enabled: true },
     ],
     workflow: [
-      { id: "w1", title: "读取工单", description: "提取问题类型、影响范围和业务环节。", enabled: true },
-      { id: "w2", title: "判断优先级", description: "结合结算影响、门店数量和阻塞程度打 P 级。", enabled: true },
-      { id: "w3", title: "推荐责任方", description: "给出系统、数据、结算或业务运营团队。", enabled: true },
-      { id: "w4", title: "生成处理摘要", description: "输出可直接转派的简洁说明。", enabled: true },
+      {
+        id: "w1", title: "读取工单", description: "提取问题类型、影响范围和业务环节。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w1f1", key: "ticket_type", type: "enum", options: ["COP", "结算", "门店数据", "账户权限", "其他"], required: true, description: "工单问题类型分类" },
+            { id: "w1f2", key: "affected_stores", type: "number", required: true, description: "受影响门店数量" },
+            { id: "w1f3", key: "business_domain", type: "text", required: true, description: "所属业务域（如结算/COP/数据平台）" },
+            { id: "w1f4", key: "blocks_settlement", type: "bool", required: true, description: "是否阻塞当日结算" },
+          ],
+        },
+      },
+      {
+        id: "w2", title: "判断优先级", description: "结合结算影响、门店数量和阻塞程度打 P 级。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w2f1", key: "priority", type: "enum", options: ["P0", "P1", "P2", "P3"], required: true, description: "工单处理优先级", constraint: "若 blocks_settlement=true 且 affected_stores≥5 则 priority 必须为 P0 或 P1" },
+            { id: "w2f2", key: "priority_reason", type: "text", required: true, description: "优先级判断依据说明" },
+            { id: "w2f3", key: "requires_immediate_action", type: "bool", required: true, description: "是否需要立即人工介入" },
+          ],
+        },
+      },
+      {
+        id: "w3", title: "推荐责任方", description: "给出系统、数据、结算或业务运营团队。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w3f1", key: "team", type: "enum", options: ["结算支持", "数据平台", "系统运营", "业务运营", "产品研发"], required: true, description: "推荐处理责任团队" },
+            { id: "w3f2", key: "routing_reason", type: "text", required: true, description: "路由理由" },
+          ],
+        },
+      },
+      {
+        id: "w4", title: "生成处理摘要", description: "输出可直接转派的简洁说明。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w4f1", key: "summary", type: "text", required: true, description: "可直接转派的处理摘要（2-3句话）" },
+            { id: "w4f2", key: "suggested_actions", type: "list", required: false, description: "建议处理步骤列表" },
+            { id: "w4f3", key: "escalate_to_human", type: "bool", required: true, description: "是否需升级人工处理" },
+          ],
+        },
+      },
     ],
     testCases: [
       {
@@ -274,6 +376,7 @@ const agentBlueprints: AgentBlueprint[] = [
         input: "12 家门店结算状态停留在待确认，影响当日结算。",
         expected: "分类为结算异常，优先级至少 P1，责任方为结算支持。",
         status: "待验证",
+        split: "train" as const,
       },
       {
         id: "tc-ticket-cop",
@@ -281,6 +384,7 @@ const agentBlueprints: AgentBlueprint[] = [
         input: "单门店 COP 今日流水未同步，暂未影响结算。",
         expected: "分类为数据同步，优先级 P2 或 P3，建议数据平台排查。",
         status: "待验证",
+        split: "holdout" as const,
       },
     ],
     trace: ["读取工单描述", "提取影响范围", "命中结算优先级规则", "路由责任团队", "生成摘要"],
@@ -321,14 +425,47 @@ const agentBlueprints: AgentBlueprint[] = [
       "你是披露合规检查 Agent。请检查材料是否覆盖资产口径、历史回款、风险提示、投资者适当性和关键假设，并输出缺口清单与补充建议。",
     guardrails: ["不得替代合规负责人最终判断", "缺少证据必须列为缺口", "涉及投资者适当性必须提示复核"],
     tools: [
-      { id: "checklist", name: "清单核对", description: "逐项核对披露与合规检查清单。", enabled: true },
-      { id: "evidence", name: "证据定位", description: "定位材料中的资产口径、历史回款和风险提示证据。", enabled: true },
-      { id: "gap", name: "缺口生成", description: "生成缺失信息和补充建议。", enabled: true },
+      { id: "checklist", sourceToolId: "tool-rule-check", name: "清单核对", description: "逐项核对披露与合规检查清单。", enabled: true },
+      { id: "evidence", sourceToolId: "tool-knowledge-search", name: "证据定位", description: "定位材料中的资产口径、历史回款和风险提示证据。", enabled: true },
+      { id: "gap", sourceToolId: "tool-report", name: "缺口生成", description: "生成缺失信息和补充建议。", enabled: true },
     ],
     workflow: [
-      { id: "w1", title: "材料分段", description: "识别资产说明、回款记录、风险提示和适当性章节。", enabled: true },
-      { id: "w2", title: "清单核对", description: "逐项比对统一检查清单。", enabled: true },
-      { id: "w3", title: "输出缺口", description: "按风险等级输出缺口和补充建议。", enabled: true },
+      {
+        id: "w1", title: "材料分段", description: "识别资产说明、回款记录、风险提示和适当性章节。", enabled: true,
+        anchor: {
+          strict: false,
+          fields: [
+            { id: "w1f1", key: "sections_found", type: "list", required: true, description: "识别到的章节列表（如资产口径/历史回款/风险提示）" },
+            { id: "w1f2", key: "sections_missing", type: "list", required: true, description: "未找到的必要章节列表" },
+            { id: "w1f3", key: "investor_suitability_present", type: "bool", required: true, description: "是否包含投资者适当性章节" },
+          ],
+        },
+      },
+      {
+        id: "w2", title: "清单核对", description: "逐项比对统一检查清单。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w2f1", key: "items_checked", type: "number", required: true, description: "已核对的清单项总数" },
+            { id: "w2f2", key: "items_passed", type: "number", required: true, description: "通过核对的清单项数" },
+            { id: "w2f3", key: "items_failed", type: "list", required: true, description: "未通过的清单项名称列表" },
+            { id: "w2f4", key: "compliance_rate", type: "number", required: true, description: "合规率（百分比，如 85 表示 85%）" },
+          ],
+        },
+      },
+      {
+        id: "w3", title: "输出缺口与建议", description: "按风险等级输出缺口和补充建议。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w3f1", key: "gaps", type: "list", required: true, description: "发现的信息缺口列表，每条一句话" },
+            { id: "w3f2", key: "risk_level", type: "enum", options: ["低", "中", "高"], required: true, description: "整体合规风险等级" },
+            { id: "w3f3", key: "conclusion", type: "enum", options: ["通过", "需关注", "拒绝发行"], required: true, description: "最终复核结论" },
+            { id: "w3f4", key: "reviewer_required", type: "bool", required: true, description: "是否需要合规负责人人工复核", constraint: "若 risk_level=高 或 investor_suitability_present=false 则必须为 true" },
+            { id: "w3f5", key: "suggestions", type: "list", required: true, description: "补充建议列表，每条对应一个缺口" },
+          ],
+        },
+      },
     ],
     testCases: [
       {
@@ -337,6 +474,15 @@ const agentBlueprints: AgentBlueprint[] = [
         input: "披露材料包含资产口径和历史回款，但未列关键风险提示。",
         expected: "识别为高优先级缺口，建议补充风险提示章节。",
         status: "待验证",
+        split: "train" as const,
+      },
+      {
+        id: "tc-compliance-suitability",
+        name: "适当性章节缺失",
+        input: "材料包含风险提示但未单独列出投资者适当性评估章节。",
+        expected: "识别为必要缺口，reviewer_required 为 true，建议补充适当性章节。",
+        status: "待验证",
+        split: "holdout" as const,
       },
     ],
     trace: ["读取披露材料", "检索合规清单", "定位证据片段", "生成缺口清单"],
@@ -397,12 +543,17 @@ function migrateState(partial: Partial<AppState>): AppState {
       })),
       apiCalls: agent.apiCalls ?? defaultAgentsById[agent.id]?.apiCalls ?? [],
       testCases: agent.testCases ?? defaultAgentsById[agent.id]?.testCases ?? [],
+      instructionSegments: agent.instructionSegments ?? defaultAgentsById[agent.id]?.instructionSegments,
+      fewShots: agent.fewShots ?? defaultAgentsById[agent.id]?.fewShots,
+      retrievalConfig: agent.retrievalConfig ?? defaultAgentsById[agent.id]?.retrievalConfig,
+      rubric: agent.rubric ?? defaultAgentsById[agent.id]?.rubric,
     })),
     docs: partial.docs ?? defaultState.docs,
     rules: mergedRules,
     tools: partial.tools ?? defaultState.tools,
     evalRuns: partial.evalRuns ?? defaultState.evalRuns,
     apiKeys: partial.apiKeys ?? defaultState.apiKeys,
+    skills: partial.skills ?? defaultSkills,
   };
 }
 
@@ -535,37 +686,33 @@ function buildTrainingRunResult(agent: Agent): TrainingRunResult {
     steps: [
       {
         title: trainingStepCatalog[0].title,
-        detail: `载入 ${cases} 条测试用例、${passedCases} 条已通过样例和人工反馈样本，生成本轮评测基线。`,
+        detail: `在 ${cases} 个用例（训练 + 留出）上跑当前版本，基线质量分 ${agent.score}，失败 ${failed} 个。`,
         metric: `${cases} cases`,
-        status: "完成",
+        status: failed ? "需关注" : "完成",
       },
       {
         title: trainingStepCatalog[1].title,
-        detail: `扫描 ${agent.knowledgeIds.length} 份关联知识，覆盖度 ${knowledgeCoverage}%，优先绑定高相关业务片段。`,
-        metric: `${knowledgeCoverage}% coverage`,
-        status: knowledgeCoverage >= 80 ? "完成" : "需关注",
+        detail: failed > 0
+          ? `对 ${failed} 个失败用例进行语义聚类，识别出 ${Math.min(failed, 3)} 个主要失败主题。`
+          : "无失败用例，跳过聚类步骤。",
+        metric: failed > 0 ? `${Math.min(failed, 3)} clusters` : "0 clusters",
+        status: "完成",
       },
       {
         title: trainingStepCatalog[2].title,
-        detail: `验证 ${enabledRules} 条启用规则的触发条件、优先级和人工复核边界。`,
-        metric: `${enabledRules} rules`,
-        status: enabledRules ? "完成" : "需关注",
+        detail: `Critic 模型对各失败主题进行根因分析，定位到 ${Math.min(failed + 1, 3)} 个白盒单元缺失。`,
+        metric: `${Math.min(failed + 1, 3)} issues`,
+        status: "完成",
       },
       {
         title: trainingStepCatalog[3].title,
-        detail: `模拟执行 ${toolsVerified} 个工具调用，检查输入输出契约、错误回退和链路耗时。`,
-        metric: `${toolsVerified} calls`,
+        detail: `Proposer 针对各失败主题生成改动 diff，共 ${Math.min(failed + 2, 4)} 条候选提案，附风险评分。`,
+        metric: `${Math.min(failed + 2, 4)} proposals`,
         status: "完成",
       },
       {
         title: trainingStepCatalog[4].title,
-        detail: `完成 ${cases} 个样例回归，失败 ${failed} 个，通过率 ${passRate}%，置信度 ${confidence}%。`,
-        metric: `${passRate}% pass`,
-        status: failed ? "需关注" : "完成",
-      },
-      {
-        title: trainingStepCatalog[5].title,
-        detail: `生成 ${versionAfter} 版本报告，记录质量分、改动点、建议和评估快照。`,
+        detail: `Critic 过滤并标注依赖关系，输出 ${Math.min(failed + 2, 4)} 条进入人工审查闸门的最终提案。`,
         metric: `${agent.version} -> ${versionAfter}`,
         status: "记录",
       },
@@ -658,6 +805,138 @@ function buildEvaluationRunResult(agent: Agent): EvaluationRunResult {
   };
 }
 
+function buildMockClusters(agent: Agent): FailureCluster[] {
+  const failedCases = agent.testCases.filter((c) => c.status !== "通过");
+  const isContract = /(合同|合规|contract)/i.test(`${agent.name} ${agent.type}`);
+  const ts = Date.now();
+  const clusters: FailureCluster[] = [];
+
+  if (failedCases.length > 0) {
+    clusters.push({
+      id: `cl-${ts}-1`,
+      label: isContract ? "数据授权条款遗漏" : "批量异常处理缺失",
+      caseCount: Math.max(1, Math.floor(failedCases.length * 0.5)),
+      diagnosis: isContract
+        ? "Agent 在含数据授权条款的合同中未主动比对授权范围与披露口径，导致高风险项被漏判。"
+        : "Agent 在涉及批量门店异常时未触发升级处理逻辑，仅给出通用建议。",
+      targetUnit: "instruction",
+    });
+    clusters.push({
+      id: `cl-${ts}-2`,
+      label: isContract ? "规则优先级判断错误" : "知识片段召回不足",
+      caseCount: Math.max(1, Math.floor(failedCases.length * 0.35)),
+      diagnosis: isContract
+        ? "相关规则存在但优先级设置偏低，Agent 指令未明确要求规则检查，导致低优先级规则漏触发。"
+        : "检索 top_k 不足，关键知识片段未被纳入上下文，Agent 只能凭通用知识作答。",
+      targetUnit: isContract ? "rule" : "retrieval",
+    });
+  }
+
+  if (agent.score < 85) {
+    clusters.push({
+      id: `cl-${ts}-3`,
+      label: "示范覆盖缺口",
+      caseCount: 1,
+      diagnosis: "当前 Few-shot 示例未覆盖边界场景，模型在陌生输入结构下输出不稳定。",
+      targetUnit: "few-shot",
+    });
+  }
+
+  return clusters;
+}
+
+function buildMockProposals(agent: Agent, clusters: FailureCluster[]): Proposal[] {
+  const failedCase = agent.testCases.find((c) => c.status !== "通过");
+  const currentTopK = agent.retrievalConfig?.topK ?? 4;
+  const ts = Date.now();
+  const isContract = /(合同|合规|contract)/i.test(`${agent.name} ${agent.type}`);
+  const proposals: Proposal[] = [];
+
+  const cl1 = clusters[0];
+  const cl2 = clusters[1];
+  const cl3 = clusters[2];
+  const idFs = `p-fs-${ts}`;
+  const idRet = `p-ret-${ts + 2}`;
+
+  if (failedCase) {
+    proposals.push({
+      id: idFs,
+      unit: "few-shot",
+      unitLabel: "Few-shot 示范",
+      before: "（当前无该场景示例）",
+      after: `输入：${failedCase.input.slice(0, 72)}\n期望输出：${failedCase.expected.slice(0, 60)}`,
+      reason: `"${failedCase.name}"场景下 Agent 输出不稳定，补充示范例子可固化该场景的正确输出模式，避免下次遗漏。`,
+      triggerCase: failedCase.name,
+      status: "pending",
+      riskFlag: false,
+      clusterId: cl3?.id,
+    });
+  }
+
+  proposals.push({
+    id: `p-rule-${ts + 1}`,
+    unit: "rule",
+    unitLabel: "规则绑定",
+    before: isContract ? "「数据授权口径一致性」规则：当前停用" : "「批量异常升级处理」规则：当前停用",
+    after: isContract ? "「数据授权口径一致性」规则：启用，优先级高" : "「批量异常升级处理」规则：启用，优先级高",
+    reason: "失败用例中该规则未触发，检查发现规则存在于规则库但当前 Agent 未启用，直接启用即可。",
+    triggerCase: failedCase?.name ?? "边界判断未覆盖",
+    status: "pending",
+    riskFlag: false,
+    clusterId: cl2?.id,
+    ruleIsolationType: "binding",
+  });
+
+  proposals.push({
+    id: `p-rule-new-${ts + 1}`,
+    unit: "rule",
+    unitLabel: "新建私有草稿规则",
+    before: "（规则库中无对应规则）",
+    after: isContract
+      ? "新建草稿：「披露材料版本与合同签署日期需在同一报告期」，优先级中，仅当前 Agent 可见"
+      : "新建草稿：「跨节点异常影响范围需说明受影响门店数量」，优先级中，仅当前 Agent 可见",
+    reason: "规则库中无覆盖该场景的标准规则，建议新建私有草稿规则。成熟后可由资产维护者提升为共享规则。",
+    triggerCase: failedCase?.name ?? "规则库覆盖缺口",
+    status: "pending",
+    riskFlag: false,
+    clusterId: cl1?.id,
+    ruleIsolationType: "create",
+  });
+
+  proposals.push({
+    id: idRet,
+    unit: "retrieval",
+    unitLabel: "检索配置",
+    before: `top_k = ${currentTopK}，标签过滤：${agent.retrievalConfig?.tagFilters?.join("、") ?? "当前配置"}`,
+    after: `top_k = ${currentTopK + 2}，标签过滤：补充"${isContract ? "数据授权、披露口径" : "批量异常、结算影响"}"`,
+    reason: "相关知识片段召回不足，增大 top_k 并补充标签过滤可提升知识命中率。",
+    triggerCase: failedCase?.name ?? "知识检索未命中",
+    status: "pending",
+    riskFlag: false,
+    clusterId: cl2?.id,
+  });
+
+  if (agent.score < 85) {
+    const taskSeg = agent.instructionSegments?.find((s) => s.label === "任务");
+    proposals.push({
+      id: `p-inst-${ts + 3}`,
+      unit: "instruction",
+      unitLabel: "指令分段（任务段）",
+      before: taskSeg ? taskSeg.content.slice(0, 80) + (taskSeg.content.length > 80 ? "…" : "") : "（当前任务段）",
+      after: (taskSeg?.content ?? "当前任务描述") + `\n同时，必须比对${isContract ? "数据授权范围与披露材料口径是否一致" : "影响门店范围与报告口径是否统一"}，不一致时标注为高风险。`,
+      reason: "当前任务指令未明确要求该关键检查项，失败用例中该场景被遗漏。",
+      triggerCase: failedCase?.name ?? "关键检查遗漏",
+      status: "pending",
+      riskFlag: false,
+      clusterId: cl1?.id,
+      dependsOn: failedCase ? [idFs] : undefined,
+      conflictsWith: [idRet],
+    });
+  }
+
+  return proposals;
+}
+
 function makeNewAgent(name: string, purpose: string, type: string, inputSchema?: string[], outputSchema?: string[]): Agent {
   const blueprint = inferAgentBlueprint(name, type, purpose);
   return {
@@ -687,6 +966,11 @@ function makeNewAgent(name: string, purpose: string, type: string, inputSchema?:
     ],
     apiCalls: [],
     testCases: blueprint.testCases.map((testCase) => ({ ...testCase, id: `${testCase.id}-${Date.now()}` })),
+    instructionSegments: [],
+    fewShots: [],
+    retrievalConfig: { topK: 4, tagFilters: [] },
+    rubric: [],
+    judgePhase: "human",
   };
 }
 
@@ -704,6 +988,7 @@ export default function App() {
   const [evaluationRun, setEvaluationRun] = useState<EvaluationRunState | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [proposalReview, setProposalReview] = useState<ProposalReviewState | null>(null);
 
   const notify = (message: string) => {
     setNotice(message);
@@ -748,7 +1033,7 @@ export default function App() {
     setSelectedCellKey(key);
   };
 
-  const completeTraining = (agentId: string, result: TrainingRunResult) => {
+  const completeTraining = (agentId: string, result: TrainingRunResult, appliedLabels?: string[]) => {
     setState((current) => {
       const target = current.agents.find((agent) => agent.id === agentId);
       if (!target) return current;
@@ -771,7 +1056,7 @@ export default function App() {
                   {
                     id: `train-${result.runId}`,
                     title: `训练运行报告 ${result.versionAfter}`,
-                    description: `完成 ${trainingSteps.length} 个训练阶段，质量分 ${result.scoreBefore} -> ${result.scoreAfter}（${result.delta >= 0 ? "+" : ""}${result.delta}），通过率 ${result.passRate}%，置信度 ${result.confidence}%。`,
+                    description: `完成 ${trainingSteps.length} 个训练阶段，质量分 ${result.scoreBefore} -> ${result.scoreAfter}（${result.delta >= 0 ? "+" : ""}${result.delta}），通过率 ${result.passRate}%，置信度 ${result.confidence}%。${appliedLabels?.length ? ` 已应用改动：${appliedLabels.join("、")}。` : ""}`,
                     time: nowLabel(),
                     version: result.versionAfter,
                     metrics: [
@@ -806,7 +1091,7 @@ export default function App() {
         ],
       };
     });
-    setTrainingRun((current) => (current?.agentId === agentId ? { ...current, completed: true, result } : current));
+    setTrainingRun(null);
     notify("训练完成，版本报告和评估记录已生成");
   };
 
@@ -818,6 +1103,8 @@ export default function App() {
     const target = agentsById[agentId];
     if (!target) return;
     const result = buildTrainingRunResult(target);
+    const clusters = buildMockClusters(target);
+    const proposals = buildMockProposals(target, clusters);
     setTrainingAgentId(agentId);
     setTrainingStep(0);
     setTrainingRun({
@@ -825,18 +1112,109 @@ export default function App() {
       startedAt: nowLabel(),
       completed: false,
       result,
+      proposals,
+      clusters,
     });
     trainingSteps.forEach((_, index) => {
       window.setTimeout(() => {
         setTrainingStep(index);
         if (index === trainingSteps.length - 1) {
           window.setTimeout(() => {
-            completeTraining(agentId, result);
-            setTrainingAgentId(null);
+            // Mark complete but do NOT upgrade version yet — wait for proposal review
+            setTrainingRun((current) =>
+              current?.agentId === agentId ? { ...current, completed: true } : current,
+            );
           }, 520);
         }
       }, index * 780);
     });
+  };
+
+  const openProposalReview = () => {
+    if (!trainingRun?.completed) return;
+    setProposalReview({
+      agentId: trainingRun.agentId,
+      proposals: trainingRun.proposals,
+      clusters: trainingRun.clusters,
+      phase: "review",
+      gateResult: null,
+      trainingResult: trainingRun.result,
+    });
+    setTrainingRun(null);
+    setTrainingAgentId(null);
+  };
+
+  const updateProposal = (proposalId: string, patch: Partial<Proposal>) => {
+    setProposalReview((current) =>
+      current
+        ? {
+            ...current,
+            proposals: current.proposals.map((p) => (p.id === proposalId ? { ...p, ...patch } : p)),
+          }
+        : null,
+    );
+  };
+
+  const submitProposalReview = () => {
+    if (!proposalReview) return;
+    const accepted = proposalReview.proposals.filter((p) => p.status === "accepted" || p.status === "edited");
+    const rejected = proposalReview.proposals.filter((p) => p.status === "rejected");
+    const agentForReview = agentsById[proposalReview.agentId];
+    const holdoutCount = agentForReview?.testCases.filter((c) => c.split === "holdout").length ?? 0;
+    setProposalReview((current) => current ? { ...current, phase: "gating" } : null);
+
+    window.setTimeout(() => {
+      const trainDelta = accepted.length * 4 - rejected.length;
+      const holdoutDelta = accepted.length * 3;
+      const autoRejectedIds: string[] = [];
+      setProposalReview((current) =>
+        current
+          ? {
+              ...current,
+              phase: "done",
+              gateResult: {
+                passed: trainDelta > 0 && holdoutDelta >= 0,
+                trainDelta,
+                holdoutDelta,
+                holdoutCount,
+                autoRejectedIds,
+              },
+            }
+          : null,
+      );
+    }, 2200);
+  };
+
+  const finalizeTraining = () => {
+    if (!proposalReview) return;
+    const { agentId, trainingResult, proposals } = proposalReview;
+    const accepted = proposals.filter((p) => p.status === "accepted" || p.status === "edited");
+
+    // Apply accepted few-shot proposals to the agent
+    const newFewShots: FewShotExample[] = accepted
+      .filter((p) => p.unit === "few-shot")
+      .map((p) => ({
+        id: `fs-applied-${p.id}`,
+        input: p.triggerCase,
+        output: p.editedContent ?? p.after,
+      }));
+
+    // Apply accepted retrieval config proposals
+    const retProposal = accepted.find((p) => p.unit === "retrieval");
+    const newTopK = retProposal ? (agentsById[agentId]?.retrievalConfig?.topK ?? 4) + 2 : undefined;
+
+    if (newFewShots.length > 0 || newTopK !== undefined) {
+      updateAgent(agentId, (agent) => ({
+        ...agent,
+        fewShots: [...(agent.fewShots ?? []), ...newFewShots],
+        retrievalConfig: newTopK !== undefined
+          ? { ...agent.retrievalConfig, topK: newTopK, tagFilters: agent.retrievalConfig?.tagFilters ?? [] }
+          : agent.retrievalConfig,
+      }));
+    }
+
+    completeTraining(agentId, trainingResult, accepted.map((p) => p.unitLabel));
+    setProposalReview(null);
   };
 
   const submitFeedback = (agentId: string, score: number, note: string) => {
@@ -1087,39 +1465,68 @@ export default function App() {
   };
 
   const createRuleForAgent = (agentId?: string) => {
-    const id = `rule-${Date.now()}`;
-    const newRule: RuleLibraryItem = {
-      id,
-      title: "新增业务规则",
-      description: "填写规则适用条件、处理方式和人工复核边界。",
-      priority: "中",
+    if (agentId) {
+      // Agent 视角下新增 → 私有草稿，不写入共享规则库
+      updateAgent(agentId, (agent) => ({
+        ...agent,
+        rules: [
+          ...agent.rules,
+          {
+            id: `draft-rule-${Date.now()}`,
+            title: "新增私有草稿规则",
+            description: "填写规则适用条件、处理方式和人工复核边界。仅该 Agent 可见，可提升为共享规则。",
+            priority: "中" as const,
+            enabled: true,
+          },
+        ],
+      }));
+      notify("私有草稿规则已新增，仅当前 Agent 可见");
+    } else {
+      // 从规则库页面新增 → 写入共享库
+      const id = `rule-${Date.now()}`;
+      const newRule: RuleLibraryItem = {
+        id,
+        title: "新增业务规则",
+        description: "填写规则适用条件、处理方式和人工复核边界。",
+        priority: "中",
+        category: "业务",
+        tags: ["新增规则", "待完善"],
+        updatedAt: nowLabel(),
+      };
+      setState((current) => ({ ...current, rules: [newRule, ...current.rules] }));
+      notify("规则已新增到统一规则库");
+    }
+  };
+
+  const promoteRuleToLibrary = (agentId: string, localRuleId: string) => {
+    const agent = agentsById[agentId];
+    const localRule = agent?.rules.find((r) => r.id === localRuleId);
+    if (!localRule) return;
+    const libraryId = `rule-promoted-${Date.now()}`;
+    const newSharedRule: RuleLibraryItem = {
+      id: libraryId,
+      title: localRule.title,
+      description: localRule.description,
+      priority: localRule.priority,
       category: "业务",
-      tags: ["新增规则", "待完善"],
-      updatedAt: "2026-06-21",
+      tags: ["从草稿提升"],
+      updatedAt: nowLabel(),
     };
     setState((current) => ({
       ...current,
-      rules: [newRule, ...current.rules],
-      agents: current.agents.map((agent) =>
-        agentId && agent.id === agentId
+      rules: [newSharedRule, ...current.rules],
+      agents: current.agents.map((a) =>
+        a.id === agentId
           ? {
-              ...agent,
-              rules: [
-                ...agent.rules,
-                {
-                  id: `local-rule-${Date.now()}`,
-                  sourceRuleId: id,
-                  title: newRule.title,
-                  description: newRule.description,
-                  priority: newRule.priority,
-                  enabled: true,
-                },
-              ],
+              ...a,
+              rules: a.rules.map((r) =>
+                r.id === localRuleId ? { ...r, sourceRuleId: libraryId } : r,
+              ),
             }
-          : agent,
+          : a,
       ),
     }));
-    notify(agentId ? "规则已新增并关联当前 Agent" : "规则已新增到统一规则库");
+    notify("草稿规则已提升为共享规则，所有 Agent 可引用");
   };
 
   const detachRuleFromAgent = (agentId: string, localRuleId: string) => {
@@ -1128,6 +1535,36 @@ export default function App() {
       rules: agent.rules.filter((rule) => rule.id !== localRuleId),
     }));
     notify("规则已从当前 Agent 移除");
+  };
+
+  const attachToolToAgent = (agentId: string, toolAssetId: string) => {
+    const asset = state.tools.find((t) => t.id === toolAssetId);
+    if (!asset) return;
+    updateAgent(agentId, (agent) => {
+      if (agent.tools.some((t) => t.sourceToolId === toolAssetId)) return agent;
+      return {
+        ...agent,
+        tools: [
+          ...agent.tools,
+          {
+            id: `tool-${Date.now()}`,
+            sourceToolId: asset.id,
+            name: asset.name,
+            description: asset.description,
+            enabled: asset.status === "启用",
+          },
+        ],
+      };
+    });
+    notify("工具已从工具库关联至当前 Agent");
+  };
+
+  const detachToolFromAgent = (agentId: string, toolItemId: string) => {
+    updateAgent(agentId, (agent) => ({
+      ...agent,
+      tools: agent.tools.filter((t) => t.id !== toolItemId),
+    }));
+    notify("工具已从当前 Agent 移除");
   };
 
   const duplicateAgent = (agentId: string) => {
@@ -1431,6 +1868,7 @@ export default function App() {
           <NavButton icon={<Database />} label="知识库" active={view === "knowledge"} onClick={() => setView("knowledge")} />
           <NavButton icon={<Settings2 />} label="规则库" active={view === "rules"} onClick={() => setView("rules")} />
           <NavButton icon={<Wrench />} label="工具库" active={view === "tools"} onClick={() => setView("tools")} />
+          <NavButton icon={<Layers3 />} label="Skill 库" active={view === "skills"} onClick={() => setView("skills")} />
           <NavButton icon={<CheckCircle2 />} label="评估追踪" active={view === "evaluation"} onClick={() => setView("evaluation")} />
           <NavButton icon={<Code2 />} label="接口中心" active={view === "api"} onClick={() => setView("api")} />
         </nav>
@@ -1512,6 +1950,41 @@ export default function App() {
           <EvaluationPage agents={state.agents} evalRuns={state.evalRuns} onRunEvaluation={runEvaluation} onOpenAgent={openAgent} />
         )}
 
+        {view === "skills" && (
+          <SkillLibraryPage
+            skills={state.skills}
+            onCreateSkill={() => {
+              setState((s) => ({
+                ...s,
+                skills: [
+                  {
+                    id: `skill-${Date.now()}`,
+                    name: "新建 Skill",
+                    version: "v0.1",
+                    description: "填写该 Skill 的用途和适用场景。",
+                    category: "通用",
+                    steps: [],
+                    linkedAgentCount: 0,
+                    updatedAt: nowLabel(),
+                  },
+                  ...s.skills,
+                ],
+              }));
+              notify("Skill 已创建");
+            }}
+            onUpdateSkill={(skillId, patch) => {
+              setState((s) => ({
+                ...s,
+                skills: s.skills.map((sk) => sk.id === skillId ? { ...sk, ...patch, updatedAt: nowLabel() } : sk),
+              }));
+            }}
+            onDeleteSkill={(skillId) => {
+              setState((s) => ({ ...s, skills: s.skills.filter((sk) => sk.id !== skillId) }));
+              notify("Skill 已删除");
+            }}
+          />
+        )}
+
         {view === "api" && (
           <ApiCenterPage
             agents={state.agents}
@@ -1547,6 +2020,11 @@ export default function App() {
             onCreateRule={createRuleForAgent}
             onUpdateAgentRule={updateAgentRule}
             onDetachRule={detachRuleFromAgent}
+            toolLibrary={state.tools}
+            onAttachTool={attachToolToAgent}
+            onDetachTool={detachToolFromAgent}
+            onPromoteRule={promoteRuleToLibrary}
+            skills={state.skills}
           />
         )}
       </main>
@@ -1556,7 +2034,18 @@ export default function App() {
           agent={trainingRunAgent}
           run={trainingRun}
           trainingStep={trainingStep}
-          onClose={() => setTrainingRun(null)}
+          onClose={() => { setTrainingRun(null); setTrainingAgentId(null); }}
+          onEnterReview={openProposalReview}
+        />
+      )}
+      {proposalReview && (
+        <ProposalReviewModal
+          agent={agentsById[proposalReview.agentId]}
+          review={proposalReview}
+          onUpdateProposal={updateProposal}
+          onSubmit={submitProposalReview}
+          onFinalize={finalizeTraining}
+          onClose={() => setProposalReview(null)}
         />
       )}
       {evaluationRun && evaluationRunAgent && (
@@ -1576,11 +2065,13 @@ function TrainingRunModal({
   run,
   trainingStep,
   onClose,
+  onEnterReview,
 }: {
   agent: Agent;
   run: TrainingRunState;
   trainingStep: number;
   onClose: () => void;
+  onEnterReview: () => void;
 }) {
   const activeIndex = run.completed ? trainingSteps.length - 1 : Math.min(trainingStep, trainingSteps.length - 1);
   const progress = run.completed ? 100 : Math.round(((activeIndex + 1) / trainingSteps.length) * 100);
@@ -1604,9 +2095,11 @@ function TrainingRunModal({
           </button>
           <div>
             <div className="eyebrow">Agent Training Run Center</div>
-            <h2>{run.completed ? "训练完成，版本报告已生成" : "训练运行中"}</h2>
+            <h2>{run.completed ? "训练完成，改动提案已就绪" : "训练运行中"}</h2>
             <p>
-              {agent.name} 正在执行样例回归、知识检索校准、规则边界验证、工具链 Dry-run 和版本报告生成。
+              {run.completed
+                ? `基线评估 → 失败聚类（${run.clusters.length} 个主题）→ 根因诊断 → 提案生成 → 质量过滤，共生成 ${run.proposals.length} 条改动建议。`
+                : `${agent.name} 正在执行基线评估、失败聚类、根因诊断、提案生成和质量过滤。`}
             </p>
           </div>
           <div className="training-modal-status">
@@ -1690,6 +2183,29 @@ function TrainingRunModal({
           </section>
         </div>
 
+        {run.completed && run.clusters.length > 0 && (
+          <div className="training-cluster-summary">
+            <div className="section-title small">
+              <Filter size={16} />
+              失败聚类结果
+            </div>
+            <div className="cluster-card-list">
+              {run.clusters.map((cluster) => (
+                <div className="cluster-card" key={cluster.id}>
+                  <div className="cluster-card-header">
+                    <span className={`proposal-unit-pill ${unitColors[cluster.targetUnit] ?? ""}`}>
+                      {cluster.targetUnit === "few-shot" ? "Few-shot" : cluster.targetUnit === "rule" ? "规则" : cluster.targetUnit === "retrieval" ? "检索" : cluster.targetUnit === "instruction" ? "指令" : "参数"}
+                    </span>
+                    <strong>{cluster.label}</strong>
+                    <span className="cluster-case-count">{cluster.caseCount} 个用例</span>
+                  </div>
+                  <p>{cluster.diagnosis}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="training-report-grid">
           <section>
             <div className="section-title small">
@@ -1716,11 +2232,21 @@ function TrainingRunModal({
         </div>
 
         <div className={`training-modal-footer ${run.completed ? "complete" : ""}`}>
-          <span>{run.completed ? "训练报告、评估记录和详细步骤已写入版本时间线。" : `开始时间 ${run.startedAt}，正在采集训练指标。`}</span>
+          <span>
+            {run.completed
+              ? `系统生成了 ${run.proposals.length} 条改动建议，请进入审查闸门逐条确认。`
+              : `开始时间 ${run.startedAt}，正在采集训练指标。`}
+          </span>
           {run.completed && (
-            <button className="primary-button" type="button" onClick={onClose}>
-              关闭
-            </button>
+            <div className="training-footer-actions">
+              <button className="ghost-button" type="button" onClick={onClose}>
+                跳过审查
+              </button>
+              <button className="primary-button" type="button" onClick={onEnterReview}>
+                <GitCompare size={16} />
+                进入审查闸门 ({run.proposals.length} 条)
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -1877,6 +2403,349 @@ function EvaluationRunModal({
             <button className="primary-button" type="button" onClick={onClose}>
               关闭
             </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const unitColors: Record<string, string> = {
+  "few-shot": "pill-fewshot",
+  rule: "pill-rule",
+  retrieval: "pill-retrieval",
+  instruction: "pill-instruction",
+  parameter: "pill-parameter",
+};
+
+function ProposalReviewModal({
+  agent,
+  review,
+  onUpdateProposal,
+  onSubmit,
+  onFinalize,
+  onClose,
+}: {
+  agent: Agent;
+  review: ProposalReviewState;
+  onUpdateProposal: (id: string, patch: Partial<Proposal>) => void;
+  onSubmit: () => void;
+  onFinalize: () => void;
+  onClose: () => void;
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+
+  const pendingCount = review.proposals.filter((p) => p.status === "pending").length;
+  const acceptedCount = review.proposals.filter((p) => p.status === "accepted" || p.status === "edited").length;
+  const rejectedCount = review.proposals.filter((p) => p.status === "rejected").length;
+  const allDecided = pendingCount === 0;
+
+  const clusterMap = new Map(review.clusters.map((c) => [c.id, c]));
+  const grouped = new Map<string | undefined, Proposal[]>();
+  for (const p of review.proposals) {
+    const key = p.clusterId;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(p);
+  }
+  const orderedGroupKeys = [
+    ...review.clusters.map((c) => c.id as string | undefined),
+    undefined,
+  ].filter((k) => grouped.has(k));
+
+  const getDepLabel = (depId: string) => {
+    const dep = review.proposals.find((p) => p.id === depId);
+    return dep?.unitLabel ?? depId;
+  };
+
+  const startEdit = (proposal: Proposal) => {
+    setEditingId(proposal.id);
+    setEditDraft(proposal.editedContent ?? proposal.after);
+  };
+
+  const saveEdit = (id: string) => {
+    onUpdateProposal(id, { status: "edited", editedContent: editDraft });
+    setEditingId(null);
+  };
+
+  const cancelEdit = () => setEditingId(null);
+
+  return (
+    <div className="training-modal-backdrop proposal-backdrop" role="dialog" aria-modal="true" aria-label="审查改动建议">
+      <div className="training-modal proposal-modal">
+        <div className="training-modal-hero">
+          <button
+            className="icon-button training-modal-close"
+            type="button"
+            onClick={onClose}
+            disabled={review.phase === "gating"}
+            aria-label="关闭"
+          >
+            <X size={17} />
+          </button>
+          <div>
+            <div className="eyebrow">Human Review Gate</div>
+            <h2>
+              {review.phase === "review" && "审查 Agent 改动建议"}
+              {review.phase === "gating" && "回归守门中…"}
+              {review.phase === "done" && (review.gateResult?.passed ? "守门通过，可升版" : "守门未通过")}
+            </h2>
+            <p>
+              {review.phase === "review" &&
+                `系统根据失败用例分析生成了 ${review.proposals.length} 条改动建议。请逐条审查，这是本轮训练唯一需要你动手的地方。`}
+              {review.phase === "gating" &&
+                "正在对候选版本跑训练集和留出集，验证改动没有引起回归退步…"}
+              {review.phase === "done" &&
+                (review.gateResult?.passed
+                  ? `训练集 +${review.gateResult.trainDelta}，留出集 +${review.gateResult.holdoutDelta}，守门通过，可提交升版。`
+                  : "留出集得分下降，部分改动已被自动剔除，请重新审查。")}
+            </p>
+          </div>
+          <div className="training-modal-status">
+            <span>{review.phase === "review" ? "Review" : review.phase === "gating" ? "Gating" : review.gateResult?.passed ? "Passed" : "Failed"}</span>
+            <strong>
+              {review.phase === "review"
+                ? `${acceptedCount + rejectedCount}/${review.proposals.length}`
+                : review.phase === "gating"
+                ? "…"
+                : review.gateResult?.passed
+                ? "✓"
+                : "✗"}
+            </strong>
+            <small>
+              {review.phase === "review" ? (allDecided ? "全部审查完毕" : `待审查 ${pendingCount} 条`) : review.phase === "gating" ? "守门中" : "守门完成"}
+            </small>
+          </div>
+        </div>
+
+        {review.phase === "gating" && (
+          <div className="proposal-gating-bar">
+            <div className="proposal-gating-progress" />
+            <p>在 train 集和 holdout 集上重跑候选版本，验证训练集提升且留出集未退步…</p>
+          </div>
+        )}
+
+        {review.phase !== "gating" && (
+          <div className="proposal-list">
+            {orderedGroupKeys.map((groupKey) => {
+              const cluster = groupKey ? clusterMap.get(groupKey) : undefined;
+              const groupProposals = grouped.get(groupKey) ?? [];
+              return (
+                <div className="proposal-cluster-group" key={groupKey ?? "__unclustered__"}>
+                  {cluster && (
+                    <div className="proposal-cluster-header">
+                      <span className={`proposal-unit-pill ${unitColors[cluster.targetUnit] ?? ""}`}>
+                        {cluster.targetUnit === "few-shot" ? "Few-shot" : cluster.targetUnit === "rule" ? "规则" : cluster.targetUnit === "retrieval" ? "检索" : cluster.targetUnit === "instruction" ? "指令" : "参数"}
+                      </span>
+                      <strong>{cluster.label}</strong>
+                      <span className="cluster-case-count">{cluster.caseCount} 个失败用例</span>
+                    </div>
+                  )}
+                  {!cluster && groupProposals.length > 0 && (
+                    <div className="proposal-cluster-header unclustered">
+                      <strong>其他改动建议</strong>
+                    </div>
+                  )}
+                  {groupProposals.map((proposal) => {
+                    const isEditing = editingId === proposal.id;
+                    const isAutoRejected = review.gateResult?.autoRejectedIds.includes(proposal.id);
+                    return (
+                      <div
+                        className={`proposal-card ${proposal.status !== "pending" ? `proposal-${proposal.status}` : ""} ${isAutoRejected ? "proposal-auto-rejected" : ""}`}
+                        key={proposal.id}
+                      >
+                        <div className="proposal-card-header">
+                          <span className={`proposal-unit-pill ${unitColors[proposal.unit] ?? ""}`}>{proposal.unitLabel}</span>
+                          {proposal.unit === "rule" && proposal.ruleIsolationType && (
+                            <span className={`rule-isolation-pill isolation-${proposal.ruleIsolationType}`}>
+                              {proposal.ruleIsolationType === "binding" ? "启/停绑定" : proposal.ruleIsolationType === "create" ? "新建草稿" : "修改共享规则"}
+                            </span>
+                          )}
+                          {proposal.unit === "rule" && proposal.ruleIsolationType === "content" && (
+                            <span className="proposal-risk-flag">
+                              <AlertTriangle size={13} />
+                              高风险·影响所有引用方
+                            </span>
+                          )}
+                          {proposal.riskFlag && proposal.ruleIsolationType !== "content" && (
+                            <span className="proposal-risk-flag">
+                              <AlertTriangle size={13} />
+                              过拟合风险
+                            </span>
+                          )}
+                          {isAutoRejected && <span className="proposal-risk-flag">⚙ 守门自动剔除</span>}
+                          {proposal.status !== "pending" && !isAutoRejected && (
+                            <span className={`proposal-decision-badge proposal-decision-${proposal.status}`}>
+                              {proposal.status === "accepted" ? "✓ 已接受" : proposal.status === "edited" ? "✎ 已编辑" : "✗ 已拒绝"}
+                            </span>
+                          )}
+                        </div>
+
+                        {(proposal.dependsOn?.length || proposal.conflictsWith?.length) && (
+                          <div className="proposal-dep-row">
+                            {proposal.dependsOn?.map((depId) => (
+                              <span className="proposal-dep-badge dep" key={depId}>
+                                依赖 · {getDepLabel(depId)}
+                              </span>
+                            ))}
+                            {proposal.conflictsWith?.map((conId) => (
+                              <span className="proposal-dep-badge conflict" key={conId}>
+                                冲突 · {getDepLabel(conId)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="proposal-diff">
+                          <div className="proposal-diff-before">
+                            <span>改前</span>
+                            <p>{proposal.before}</p>
+                          </div>
+                          <div className="proposal-diff-arrow">→</div>
+                          <div className="proposal-diff-after">
+                            <span>改后</span>
+                            {isEditing ? (
+                              <textarea
+                                className="proposal-edit-textarea"
+                                value={editDraft}
+                                onChange={(e) => setEditDraft(e.target.value)}
+                                rows={3}
+                                autoFocus
+                              />
+                            ) : (
+                              <p>{proposal.editedContent ?? proposal.after}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="proposal-meta">
+                          <div className="proposal-reason">
+                            <span>诊断原因</span>
+                            <p>{proposal.reason}</p>
+                          </div>
+                          <div className="proposal-trigger">
+                            <span>触发用例</span>
+                            <strong>{proposal.triggerCase}</strong>
+                          </div>
+                        </div>
+
+                        {review.phase === "review" && (
+                          <div className="proposal-actions">
+                            {proposal.unit === "rule" && proposal.ruleIsolationType === "content" ? (
+                              <>
+                                <span className="rule-content-notice">修改共享规则内容需资产维护者审批，业务训练者只能提交申请。</span>
+                                <button
+                                  className="proposal-btn-edit"
+                                  type="button"
+                                  onClick={() => onUpdateProposal(proposal.id, { status: "accepted" })}
+                                >
+                                  <Save size={13} />
+                                  提交变更申请
+                                </button>
+                                <button
+                                  className={`proposal-btn-reject ${proposal.status === "rejected" ? "active" : ""}`}
+                                  type="button"
+                                  onClick={() => onUpdateProposal(proposal.id, { status: "rejected" })}
+                                >
+                                  <ThumbsDown size={13} />
+                                  拒绝
+                                </button>
+                              </>
+                            ) : isEditing ? (
+                              <>
+                                <button className="proposal-btn-accept" type="button" onClick={() => saveEdit(proposal.id)}>
+                                  <Save size={13} />
+                                  保存编辑
+                                </button>
+                                <button className="proposal-btn-reject" type="button" onClick={cancelEdit}>
+                                  取消
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  className={`proposal-btn-accept ${proposal.status === "accepted" ? "active" : ""}`}
+                                  type="button"
+                                  onClick={() => onUpdateProposal(proposal.id, { status: "accepted" })}
+                                >
+                                  <ThumbsUp size={13} />
+                                  接受
+                                </button>
+                                <button
+                                  className={`proposal-btn-edit ${proposal.status === "edited" ? "active" : ""}`}
+                                  type="button"
+                                  onClick={() => startEdit(proposal)}
+                                >
+                                  <Edit3 size={13} />
+                                  编辑后接受
+                                </button>
+                                <button
+                                  className={`proposal-btn-reject ${proposal.status === "rejected" ? "active" : ""}`}
+                                  type="button"
+                                  onClick={() => onUpdateProposal(proposal.id, { status: "rejected" })}
+                                >
+                                  <ThumbsDown size={13} />
+                                  拒绝
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className={`training-modal-footer ${review.phase !== "review" ? "complete" : ""}`}>
+          {review.phase === "review" && (
+            <>
+              <span>
+                {allDecided
+                  ? `已审查全部 ${review.proposals.length} 条改动（接受 ${acceptedCount} 条，拒绝 ${rejectedCount} 条）。`
+                  : `还有 ${pendingCount} 条未审查，全部决定后可提交。`}
+              </span>
+              <button className="primary-button" type="button" onClick={onSubmit} disabled={!allDecided || acceptedCount === 0}>
+                <ShieldCheck size={16} />
+                提交审查 · 运行回归守门
+              </button>
+            </>
+          )}
+          {review.phase === "gating" && (
+            <span>正在跑训练集与留出集，请稍候…</span>
+          )}
+          {review.phase === "done" && review.gateResult && (
+            <>
+              <div className="gate-result-block">
+                <span>
+                  训练集质量分 {review.trainingResult.scoreBefore}→+{review.gateResult.trainDelta}，
+                  留出集 {review.gateResult.holdoutDelta >= 0 ? `+${review.gateResult.holdoutDelta}` : review.gateResult.holdoutDelta}，
+                  {review.gateResult.passed ? "守门通过。" : "留出集未提升，部分改动已自动剔除。"}
+                </span>
+                {review.gateResult.holdoutCount < 10 && (
+                  <span className="gate-reliability-note">
+                    <AlertTriangle size={12} />
+                    {review.gateResult.holdoutCount === 0
+                      ? "留出集为空，守门结论仅供参考，建议补充留出用例后重新评估。"
+                      : `留出集仅 ${review.gateResult.holdoutCount} 条，样本量偏少，结论可信度有限。`}
+                  </span>
+                )}
+              </div>
+              <div className="training-footer-actions">
+                <button className="ghost-button" type="button" onClick={onClose}>
+                  放弃本轮
+                </button>
+                {review.gateResult.passed && (
+                  <button className="primary-button" type="button" onClick={onFinalize}>
+                    <Rocket size={16} />
+                    升版提交 ({review.trainingResult.versionBefore} → {review.trainingResult.versionAfter})
+                  </button>
+                )}
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -2886,6 +3755,356 @@ function ToolsPage({
   );
 }
 
+// ── Skill Library Page ────────────────────────────────────────────────────────
+
+function AnchorFieldBadge({ field }: { field: import("./types").AnchorField }) {
+  const typeColor: Record<string, string> = {
+    enum: "#7c3aed",
+    bool: "#0369a1",
+    text: "#065f46",
+    number: "#92400e",
+    list: "#9f1239",
+  };
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: 11,
+        padding: "2px 7px",
+        borderRadius: 20,
+        background: typeColor[field.type] + "18",
+        color: typeColor[field.type],
+        fontWeight: 600,
+        border: `1px solid ${typeColor[field.type]}30`,
+      }}
+    >
+      <span style={{ opacity: 0.7 }}>{field.key}</span>
+      <span>·</span>
+      <span>{field.type}</span>
+      {field.required && <span style={{ color: "#ef4444", fontSize: 10 }}>*</span>}
+    </span>
+  );
+}
+
+function SkillCard({
+  skill,
+  onUpdate,
+  onDelete,
+}: {
+  skill: import("./types").Skill;
+  onUpdate: (patch: Partial<import("./types").Skill>) => void;
+  onDelete: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const totalFields = skill.steps.reduce((sum, s) => sum + (s.anchor?.fields.length ?? 0), 0);
+
+  const categoryColor: Record<string, string> = { 合规: "#7c3aed", 风控: "#dc2626", 运维: "#2563eb", 通用: "#6b7280" };
+  const catColor = categoryColor[skill.category] ?? "#6b7280";
+
+  const updateStep = (idx: number, patch: Partial<import("./types").SkillStep>) => {
+    const steps = skill.steps.map((s, i) => (i === idx ? { ...s, ...patch } : s));
+    onUpdate({ steps });
+  };
+
+  const addSkillStep = () => {
+    onUpdate({ steps: [...skill.steps, { title: "新步骤", description: "", anchor: { strict: true, fields: [] } }] });
+  };
+
+  const removeSkillStep = (idx: number) => {
+    onUpdate({ steps: skill.steps.filter((_, i) => i !== idx) });
+  };
+
+  const addSkillAnchorField = (stepIdx: number) => {
+    const step = skill.steps[stepIdx];
+    const newField: import("./types").AnchorField = { id: `skf-${Date.now()}`, key: "新字段", type: "text", required: true, description: "" };
+    updateStep(stepIdx, { anchor: { strict: step.anchor?.strict ?? true, fields: [...(step.anchor?.fields ?? []), newField] } });
+  };
+
+  const removeSkillAnchorField = (stepIdx: number, fieldId: string) => {
+    const step = skill.steps[stepIdx];
+    updateStep(stepIdx, { anchor: { ...step.anchor!, fields: step.anchor!.fields.filter((f) => f.id !== fieldId) } });
+  };
+
+  const updateSkillAnchorField = (stepIdx: number, fieldId: string, patch: Partial<import("./types").AnchorField>) => {
+    const step = skill.steps[stepIdx];
+    updateStep(stepIdx, { anchor: { ...step.anchor!, fields: step.anchor!.fields.map((f) => f.id === fieldId ? { ...f, ...patch } : f) } });
+  };
+
+  return (
+    <div className={`skill-card ${editing ? "skill-card-editing" : ""}`}>
+      <div className="skill-card-header">
+        <div className="skill-card-title-row">
+          {editing ? (
+            <>
+              <input
+                className="skill-edit-name"
+                value={skill.name}
+                onChange={(e) => onUpdate({ name: e.target.value })}
+                placeholder="Skill 名称"
+              />
+              <input
+                className="skill-edit-version"
+                value={skill.version}
+                onChange={(e) => onUpdate({ version: e.target.value })}
+                placeholder="v1.0"
+              />
+              <select
+                className="skill-edit-category"
+                value={skill.category}
+                onChange={(e) => onUpdate({ category: e.target.value })}
+              >
+                {["合规", "风控", "运维", "通用"].map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </>
+          ) : (
+            <>
+              <span className="skill-card-name">{skill.name}</span>
+              <span className="skill-version-badge">{skill.version}</span>
+              <span className="skill-category-badge" style={{ background: catColor + "18", color: catColor, border: `1px solid ${catColor}30` }}>
+                {skill.category}
+              </span>
+            </>
+          )}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <button className="ghost-button compact" type="button" onClick={() => setEditing((v) => !v)}>
+              {editing ? "完成" : "编辑"}
+            </button>
+            <button className="ghost-button compact danger-button" type="button" onClick={onDelete}>删除</button>
+          </div>
+        </div>
+        <div className="skill-card-meta">
+          <span>{skill.steps.length} 步骤</span>
+          <span>·</span>
+          <span>{totalFields} 输出字段</span>
+          <span>·</span>
+          <span>已关联 {skill.linkedAgentCount} 个 Agent</span>
+          <span>·</span>
+          <span>更新于 {skill.updatedAt}</span>
+        </div>
+        {editing ? (
+          <textarea
+            className="skill-edit-desc"
+            value={skill.description}
+            rows={2}
+            onChange={(e) => onUpdate({ description: e.target.value })}
+            placeholder="Skill 用途和适用场景"
+          />
+        ) : (
+          <p className="skill-card-desc">{skill.description}</p>
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+          <button className="ghost-button compact" type="button" onClick={() => setExpanded((v) => !v)} style={{ fontSize: 12 }}>
+            {expanded ? "收起步骤 ▲" : `展开步骤 (${skill.steps.length}) ▼`}
+          </button>
+          {editing && (
+            <button className="ghost-button compact" type="button" onClick={addSkillStep} style={{ fontSize: 12 }}>
+              <Plus size={12} /> 添加步骤
+            </button>
+          )}
+        </div>
+      </div>
+      {expanded && (
+        <div className="skill-steps-list">
+          {skill.steps.map((step, i) => (
+            <div key={i} className="skill-step-row">
+              <div className="skill-step-index">{i + 1}</div>
+              <div className="skill-step-body">
+                {editing ? (
+                  <>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                      <input
+                        className="skill-step-title-input"
+                        value={step.title}
+                        onChange={(e) => updateStep(i, { title: e.target.value })}
+                        placeholder="步骤名称"
+                      />
+                      <button className="ghost-button compact danger-button" type="button" onClick={() => removeSkillStep(i)}>
+                        <X size={12} />
+                      </button>
+                    </div>
+                    <textarea
+                      className="skill-step-desc-input"
+                      value={step.description}
+                      rows={2}
+                      onChange={(e) => updateStep(i, { description: e.target.value })}
+                      placeholder="步骤描述（SOP 说明）"
+                    />
+                    <div className="skill-anchor-editor">
+                      <div className="skill-anchor-head">
+                        <span>输出锚点字段</span>
+                        <label className="anchor-strict-toggle">
+                          <input
+                            type="checkbox"
+                            checked={step.anchor?.strict ?? true}
+                            onChange={(e) => updateStep(i, { anchor: { ...(step.anchor ?? { fields: [] }), strict: e.target.checked } })}
+                          />
+                          严格模式
+                        </label>
+                        <button className="ghost-button compact" type="button" onClick={() => addSkillAnchorField(i)} style={{ fontSize: 11 }}>
+                          <Plus size={11} /> 添加字段
+                        </button>
+                      </div>
+                      {(step.anchor?.fields ?? []).map((f) => (
+                        <div className="skill-anchor-field-row" key={f.id}>
+                          <input value={f.key} placeholder="字段名" onChange={(e) => updateSkillAnchorField(i, f.id, { key: e.target.value })} />
+                          <select value={f.type} onChange={(e) => updateSkillAnchorField(i, f.id, { type: e.target.value as import("./types").AnchorField["type"] })}>
+                            <option value="enum">enum</option>
+                            <option value="bool">bool</option>
+                            <option value="text">text</option>
+                            <option value="number">number</option>
+                            <option value="list">list</option>
+                          </select>
+                          {f.type === "enum" && (
+                            <input
+                              value={f.options?.join(",") ?? ""}
+                              placeholder="选项A,B"
+                              onChange={(e) => updateSkillAnchorField(i, f.id, { options: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
+                            />
+                          )}
+                          <label className="anchor-required">
+                            <input type="checkbox" checked={f.required} onChange={(e) => updateSkillAnchorField(i, f.id, { required: e.target.checked })} />
+                            必填
+                          </label>
+                          <input value={f.description} placeholder="含义说明" onChange={(e) => updateSkillAnchorField(i, f.id, { description: e.target.value })} />
+                          <input
+                            value={f.constraint ?? ""}
+                            placeholder="跨字段约束（选填）"
+                            onChange={(e) => updateSkillAnchorField(i, f.id, { constraint: e.target.value || undefined })}
+                          />
+                          <button className="ghost-button compact danger-button" type="button" onClick={() => removeSkillAnchorField(i, f.id)}>
+                            <X size={11} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="skill-step-title">{step.title}</div>
+                    <div className="skill-step-desc">{step.description}</div>
+                    {step.anchor && step.anchor.fields.length > 0 && (
+                      <div className="skill-step-anchor">
+                        <span className="anchor-label">输出锚点{step.anchor.strict ? "（严格）" : ""}：</span>
+                        <div className="anchor-field-badges">
+                          {step.anchor.fields.map((f) => <AnchorFieldBadge key={f.id} field={f} />)}
+                        </div>
+                        {step.anchor.fields.some((f) => f.constraint) && (
+                          <div className="anchor-constraints">
+                            {step.anchor.fields.filter((f) => f.constraint).map((f) => (
+                              <div key={f.id} className="anchor-constraint-row">
+                                <span className="anchor-constraint-key">{f.key}：</span>
+                                <span className="anchor-constraint-val">{f.constraint}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SkillLibraryPage({
+  skills,
+  onCreateSkill,
+  onUpdateSkill,
+  onDeleteSkill,
+}: {
+  skills: import("./types").Skill[];
+  onCreateSkill: () => void;
+  onUpdateSkill: (skillId: string, patch: Partial<import("./types").Skill>) => void;
+  onDeleteSkill: (skillId: string) => void;
+}) {
+  const [filter, setFilter] = useState("");
+  const filtered = skills.filter(
+    (s) =>
+      filter === "" ||
+      s.name.includes(filter) ||
+      s.category.includes(filter) ||
+      s.description.includes(filter),
+  );
+
+  const categoryGroups = Array.from(new Set(skills.map((s) => s.category)));
+
+  return (
+    <section className="page">
+      <div className="page-sticky-zone">
+        <PageHeader
+          eyebrow="Skill Library"
+          title="Skill 库"
+          description="可复用的标准化步骤包，每个 Skill 含 SOP 步骤 + 输出锚点定义，可一键导入任意 Agent 工作流。"
+          actions={
+            <button className="primary-button" type="button" onClick={onCreateSkill}>
+              <Plus size={15} />
+              新建 Skill
+            </button>
+          }
+        />
+      </div>
+
+      <div className="skill-library-stats">
+        {categoryGroups.map((cat) => {
+          const count = skills.filter((s) => s.category === cat).length;
+          return (
+            <div key={cat} className="skill-stat-chip">
+              <span className="skill-stat-cat">{cat}</span>
+              <span className="skill-stat-count">{count}</span>
+            </div>
+          );
+        })}
+        <div className="skill-stat-chip">
+          <span className="skill-stat-cat">全部</span>
+          <span className="skill-stat-count">{skills.length}</span>
+        </div>
+      </div>
+
+      <div className="tool-search-bar" style={{ marginBottom: 16 }}>
+        <input
+          className="rule-search-input"
+          placeholder="搜索 Skill 名称、分类或描述…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+      </div>
+
+      <div className="skill-concept-banner">
+        <div className="skill-concept-title">SOP + 输出锚点 = 稳定工作流</div>
+        <div className="skill-concept-body">
+          每个工作流步骤通过 <strong>输出锚点（Output Anchor）</strong> 定义结构化输出字段（枚举 / 布尔 / 文本 / 数值 / 列表），约束 Agent 每步必须产出的内容，而不限制推理过程。
+          Skill 是步骤 + 锚点的命名版本包，可跨 Agent 复用，并通过版本号管理迭代。
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="empty-hint">没有匹配的 Skill</div>
+      ) : (
+        <div className="skill-card-list">
+          {filtered.map((skill) => (
+            <SkillCard
+              key={skill.id}
+              skill={skill}
+              onUpdate={(patch) => onUpdateSkill(skill.id, patch)}
+              onDelete={() => onDeleteSkill(skill.id)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function EvaluationPage({
   agents,
   evalRuns,
@@ -3247,6 +4466,36 @@ function ApiCenterPage({
   );
 }
 
+function SchemaTagEditor({ label, tags, onChange }: { label: string; tags: string[]; onChange: (tags: string[]) => void }) {
+  const [input, setInput] = useState("");
+  const add = () => {
+    const val = input.trim();
+    if (val && !tags.includes(val)) { onChange([...tags, val]); }
+    setInput("");
+  };
+  return (
+    <div className="schema-tag-editor">
+      <span className="schema-tag-label">{label}</span>
+      <div className="schema-tags">
+        {tags.map((tag) => (
+          <span key={tag} className="schema-tag">
+            {tag}
+            <button type="button" onClick={() => onChange(tags.filter((t) => t !== tag))}>×</button>
+          </span>
+        ))}
+        <input
+          className="schema-tag-input"
+          value={input}
+          placeholder="新增字段…"
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+        />
+        <button className="ghost-button compact" type="button" onClick={add}>+</button>
+      </div>
+    </div>
+  );
+}
+
 function AgentDetailPage({
   agent,
   docs,
@@ -3268,6 +4517,11 @@ function AgentDetailPage({
   onCreateRule,
   onUpdateAgentRule,
   onDetachRule,
+  toolLibrary,
+  onAttachTool,
+  onDetachTool,
+  onPromoteRule,
+  skills,
 }: {
   agent: Agent;
   docs: KnowledgeDoc[];
@@ -3289,19 +4543,25 @@ function AgentDetailPage({
   onCreateRule: (agentId?: string) => void;
   onUpdateAgentRule: (agentId: string, localRuleId: string, patch: Partial<RuleItem>) => void;
   onDetachRule: (agentId: string, localRuleId: string) => void;
+  toolLibrary: ToolAsset[];
+  onAttachTool: (agentId: string, toolAssetId: string) => void;
+  onDetachTool: (agentId: string, toolItemId: string) => void;
+  onPromoteRule: (agentId: string, localRuleId: string) => void;
+  skills: Skill[];
 }) {
   const [feedbackScore, setFeedbackScore] = useState(agent.feedbackScore ?? 5);
-  const [feedbackNote, setFeedbackNote] = useState(agent.feedbackNote ?? "输出建议更具体，适合纳入下一轮优化。");
+  const [feedbackNote, setFeedbackNote] = useState(agent.feedbackNote ?? "");
   const [publishWork, setPublishWork] = useState(agent.matrixCellKey?.split(":")[0] ?? "contractual");
   const [publishFunc, setPublishFunc] = useState(agent.matrixCellKey?.split(":")[1] ?? "contract-registrar");
   const [ruleToAttach, setRuleToAttach] = useState(ruleLibrary[0]?.id ?? "");
+  const [toolToAttach, setToolToAttach] = useState(toolLibrary[0]?.id ?? "");
   const [activeDetailSection, setActiveDetailSection] = useState("detail-overview");
   const [detailSlideDirection, setDetailSlideDirection] = useState<"forward" | "backward">("forward");
   const isTraining = trainingAgentId === agent.id;
 
   useEffect(() => {
     setFeedbackScore(agent.feedbackScore ?? 5);
-    setFeedbackNote(agent.feedbackNote ?? "输出建议更具体，适合纳入下一轮优化。");
+    setFeedbackNote(agent.feedbackNote ?? "");
     setPublishWork(agent.matrixCellKey?.split(":")[0] ?? "contractual");
     setPublishFunc(agent.matrixCellKey?.split(":")[1] ?? "contract-registrar");
   }, [agent.id, agent.feedbackNote, agent.feedbackScore, agent.matrixCellKey]);
@@ -3334,7 +4594,7 @@ function AgentDetailPage({
   ];
   const detailSections = [
     { id: "detail-overview", label: "概览", summary: `${readinessScore} 分预检` },
-    { id: "detail-prompt", label: "Prompt 编辑器", summary: "角色与输出" },
+    { id: "detail-prompt", label: "白盒配置单元", summary: `${agent.instructionSegments?.length ?? 0} 段 / ${agent.fewShots?.length ?? 0} 示范` },
     { id: "detail-tools", label: "工具与边界", summary: `${enabledTools} 工具 / ${agent.guardrails.length} 边界` },
     { id: "detail-workflow", label: "工作流管理", summary: `${agent.workflow.filter((step) => step.enabled).length} 个步骤` },
     { id: "detail-assets", label: "知识与规则", summary: `${agent.knowledgeIds.length} 文档 / ${enabledRules} 规则` },
@@ -3357,28 +4617,94 @@ function AgentDetailPage({
   const paneClass = (sectionId: string, extra = "") =>
     `detail-pane-item detail-pane-${sectionId.replace("detail-", "")} ${activeDetailSection === sectionId ? `active slide-${detailSlideDirection}` : ""} ${extra}`.trim();
 
-  const addAgentTool = () => {
+  const [anchorExpanded, setAnchorExpanded] = useState<Set<string>>(new Set());
+  const toggleAnchorExpanded = (stepId: string) =>
+    setAnchorExpanded((prev) => { const next = new Set(prev); next.has(stepId) ? next.delete(stepId) : next.add(stepId); return next; });
+
+  const addAnchorField = (stepId: string) => {
     onUpdateAgent(agent.id, (item) => ({
       ...item,
-      tools: [
-        ...item.tools,
-        {
-          id: `tool-${Date.now()}`,
-          name: "新增工具能力",
-          description: "补充该 Agent 在执行流程中可调用的工具能力。",
-          enabled: true,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : {
+          ...s,
+          anchor: {
+            strict: s.anchor?.strict ?? true,
+            fields: [...(s.anchor?.fields ?? []), { id: `af-${Date.now()}`, key: "新字段", type: "text" as const, required: true, description: "" }],
+          },
         },
-      ],
+      ),
     }));
-    onNotify("Agent 工具能力已新增");
   };
 
-  const deleteAgentTool = (toolId: string) => {
+  const removeAnchorField = (stepId: string, fieldId: string) => {
     onUpdateAgent(agent.id, (item) => ({
       ...item,
-      tools: item.tools.filter((tool) => tool.id !== toolId),
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : { ...s, anchor: { ...s.anchor!, fields: s.anchor!.fields.filter((f) => f.id !== fieldId) } },
+      ),
     }));
-    onNotify("Agent 工具能力已删除");
+  };
+
+  const updateAnchorField = (stepId: string, fieldId: string, patch: Partial<AnchorField>) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : { ...s, anchor: { ...s.anchor!, fields: s.anchor!.fields.map((f) => f.id === fieldId ? { ...f, ...patch } : f) } },
+      ),
+    }));
+  };
+
+  const addRoutingRule = (stepId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : {
+          ...s,
+          routing: [...(s.routing ?? []), { id: `rt-${Date.now()}`, condition: "", nextStepId: "" }],
+        },
+      ),
+    }));
+  };
+
+  const removeRoutingRule = (stepId: string, ruleId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : { ...s, routing: (s.routing ?? []).filter((r) => r.id !== ruleId) },
+      ),
+    }));
+  };
+
+  const updateRoutingRule = (stepId: string, ruleId: string, patch: { condition?: string; nextStepId?: string }) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : {
+          ...s,
+          routing: (s.routing ?? []).map((r) => r.id === ruleId ? { ...r, ...patch } : r),
+        },
+      ),
+    }));
+  };
+
+  const applySkillToWorkflow = (skillId: string) => {
+    const skill = skills.find((sk) => sk.id === skillId);
+    if (!skill) return;
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: [
+        ...item.workflow,
+        ...skill.steps.map((step, i) => ({
+          id: `sk-step-${Date.now()}-${i}`,
+          title: step.title,
+          description: step.description,
+          enabled: true,
+          skillRef: skillId,
+          anchor: step.anchor,
+        })),
+      ],
+    }));
+    onNotify(`已从 Skill「${skill.name}」引入 ${skill.steps.length} 个步骤`);
   };
 
   const addGuardrail = () => {
@@ -3426,6 +4752,63 @@ function AgentDetailPage({
       workflow: item.workflow.filter((step) => step.id !== stepId),
     }));
     onNotify("工作流步骤已删除");
+  };
+
+  const addFewShot = () => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      fewShots: [
+        ...(item.fewShots ?? []),
+        { id: `fs-${Date.now()}`, input: "填写一条标准输入示例。", output: "填写对应的期望输出。" },
+      ],
+    }));
+    onNotify("Few-shot 示范已新增");
+  };
+
+  const deleteFewShot = (fsId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      fewShots: (item.fewShots ?? []).filter((fs) => fs.id !== fsId),
+    }));
+    onNotify("Few-shot 示范已删除");
+  };
+
+  const addInstructionSegment = () => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      instructionSegments: [
+        ...(item.instructionSegments ?? []),
+        { id: `seg-${Date.now()}`, label: "约束" as const, content: "填写新约束条件。" },
+      ],
+    }));
+    onNotify("指令段已新增");
+  };
+
+  const deleteInstructionSegment = (segId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      instructionSegments: (item.instructionSegments ?? []).filter((s) => s.id !== segId),
+    }));
+    onNotify("指令段已删除");
+  };
+
+  const addRubricCriterion = () => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      rubric: [
+        ...(item.rubric ?? []),
+        { id: `rub-${Date.now()}`, dimension: "新增评估维度", weight: 10, guide: "填写该维度的打分指引。" },
+      ],
+    }));
+    onNotify("Rubric 维度已新增");
+  };
+
+  const deleteRubricCriterion = (rubId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      rubric: (item.rubric ?? []).filter((r) => r.id !== rubId),
+    }));
+    onNotify("Rubric 维度已删除");
   };
 
   const addTestCase = () => {
@@ -3587,26 +4970,159 @@ function AgentDetailPage({
             <span>案例</span>
             <strong>{agent.caseUploaded ? "已上传模拟案例" : "待上传模拟案例"}</strong>
           </div>
+          <div className="schema-editor-block">
+            <SchemaTagEditor
+              label="输入字段"
+              tags={agent.inputSchema ?? []}
+              onChange={(tags) => onUpdateAgent(agent.id, (item) => ({ ...item, inputSchema: tags }))}
+            />
+            <SchemaTagEditor
+              label="输出字段"
+              tags={agent.outputSchema ?? []}
+              onChange={(tags) => onUpdateAgent(agent.id, (item) => ({ ...item, outputSchema: tags }))}
+            />
+          </div>
         </section>
 
         <div className={paneClass("detail-prompt", "detail-block-heading span-2")}>
           <span>02</span>
           <div>
-            <strong>Prompt 编辑器</strong>
-            <p>维护 Agent 的角色、任务边界、输出结构和人工复核要求。</p>
+            <strong>白盒配置单元</strong>
+            <p>Agent 的"大脑"以具名段落呈现，可逐段查看和编辑，训练系统也对这些单元提 diff 建议。</p>
           </div>
         </div>
 
-        <section className={paneClass("detail-prompt", "panel prompt-panel span-2")}>
-          <div className="section-title">
-            <Sparkles size={16} />
-            Prompt 编辑器
+        <section className={paneClass("detail-prompt", "panel prompt-panel span-2 whitebox-panel")}>
+          <div className="section-title with-action">
+            <span>
+              <Layers3 size={16} />
+              指令分段
+            </span>
+            <button className="ghost-button compact" type="button" onClick={addInstructionSegment}>
+              <Plus size={15} />
+              添加段
+            </button>
           </div>
-          <textarea
-            className="prompt-editor"
-            value={agent.prompt}
-            onChange={(event) => onUpdateAgent(agent.id, (item) => ({ ...item, prompt: event.target.value }))}
-          />
+          {(agent.instructionSegments ?? []).length > 0 ? (
+            <div className="instruction-segments">
+              {(agent.instructionSegments ?? []).map((seg) => (
+                <div className="instruction-segment-card" key={seg.id}>
+                  <div className="segment-label-row">
+                    <select
+                      className={`segment-label-select segment-label-${seg.label === "角色" ? "role" : seg.label === "任务" ? "task" : seg.label === "约束" ? "constraint" : "output"}`}
+                      value={seg.label}
+                      onChange={(e) =>
+                        onUpdateAgent(agent.id, (item) => ({
+                          ...item,
+                          instructionSegments: (item.instructionSegments ?? []).map((s) =>
+                            s.id === seg.id ? { ...s, label: e.target.value as InstructionSegment["label"] } : s,
+                          ),
+                        }))
+                      }
+                    >
+                      <option value="角色">角色</option>
+                      <option value="任务">任务</option>
+                      <option value="约束">约束</option>
+                      <option value="输出格式">输出格式</option>
+                    </select>
+                    <button className="ghost-button compact danger-button" type="button" onClick={() => deleteInstructionSegment(seg.id)}>
+                      删除
+                    </button>
+                  </div>
+                  <textarea
+                    value={seg.content}
+                    rows={2}
+                    onChange={(e) =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        instructionSegments: (item.instructionSegments ?? []).map((s) =>
+                          s.id === seg.id ? { ...s, content: e.target.value } : s,
+                        ),
+                      }))
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-whitebox">
+              <p>暂无指令分段。系统可在训练审查时自动生成分段建议，或点击上方"添加段"手动创建。</p>
+              <button className="secondary-button" type="button" onClick={() =>
+                onUpdateAgent(agent.id, (item) => ({
+                  ...item,
+                  instructionSegments: [
+                    { id: `seg-r-${Date.now()}`, label: "角色" as const, content: agent.prompt.split("。")[0] + "。" },
+                    { id: `seg-t-${Date.now() + 1}`, label: "任务" as const, content: "请根据业务背景和关联知识库完成核心判断任务。" },
+                    { id: `seg-c-${Date.now() + 2}`, label: "约束" as const, content: agent.guardrails[0] ?? "高风险情况必须建议人工复核。" },
+                    { id: `seg-o-${Date.now() + 3}`, label: "输出格式" as const, content: "输出必须包含结论、命中规则和修改建议。" },
+                  ],
+                }))
+              }>
+                <Sparkles size={15} />
+                自动拆分现有 Prompt
+              </button>
+            </div>
+          )}
+        </section>
+
+        <section className={paneClass("detail-prompt", "panel span-2 fewshot-panel")}>
+          <div className="section-title with-action">
+            <span>
+              <FileText size={16} />
+              Few-shot 示范
+            </span>
+            <button className="ghost-button compact" type="button" onClick={addFewShot}>
+              <Plus size={15} />
+              添加示范
+            </button>
+          </div>
+          <p className="section-hint">这是非技术用户最自然的训练方式——举例子教 Agent。训练系统可从失败用例中自动提 Few-shot 建议。</p>
+          {(agent.fewShots ?? []).length > 0 ? (
+            <div className="fewshot-list">
+              {(agent.fewShots ?? []).map((fs, index) => (
+                <div className="fewshot-card" key={fs.id}>
+                  <div className="fewshot-card-header">
+                    <span className="fewshot-index">示范 {index + 1}</span>
+                    <button className="ghost-button compact danger-button" type="button" onClick={() => deleteFewShot(fs.id)}>
+                      删除
+                    </button>
+                  </div>
+                  <div className="fewshot-io">
+                    <div>
+                      <span>输入</span>
+                      <textarea
+                        value={fs.input}
+                        rows={2}
+                        onChange={(e) =>
+                          onUpdateAgent(agent.id, (item) => ({
+                            ...item,
+                            fewShots: (item.fewShots ?? []).map((f) => (f.id === fs.id ? { ...f, input: e.target.value } : f)),
+                          }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <span>期望输出</span>
+                      <textarea
+                        value={fs.output}
+                        rows={3}
+                        onChange={(e) =>
+                          onUpdateAgent(agent.id, (item) => ({
+                            ...item,
+                            fewShots: (item.fewShots ?? []).map((f) => (f.id === fs.id ? { ...f, output: e.target.value } : f)),
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-whitebox">
+              <p>暂无示范用例。运行训练并在审查闸门中接受 Few-shot 建议，系统会自动从失败用例生成示范。</p>
+            </div>
+          )}
         </section>
 
         <div className={paneClass("detail-tools", "detail-block-heading span-2")}>
@@ -3618,14 +5134,25 @@ function AgentDetailPage({
         </div>
 
         <section className={paneClass("detail-tools", "panel")}>
-          <div className="section-title with-action">
-            <span>
-              <Wrench size={16} />
-              工具能力
-            </span>
-            <button className="ghost-button compact" type="button" onClick={addAgentTool}>
-              <Plus size={15} />
-              添加工具
+          <div className="section-title">
+            <Wrench size={16} />
+            工具能力
+          </div>
+          <div className="rule-picker">
+            <select value={toolToAttach} onChange={(event) => setToolToAttach(event.target.value)}>
+              {toolLibrary.map((tool) => (
+                <option key={tool.id} value={tool.id}>
+                  {tool.category} / {tool.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="secondary-button compact"
+              type="button"
+              onClick={() => onAttachTool(agent.id, toolToAttach)}
+              disabled={!toolToAttach}
+            >
+              关联工具
             </button>
           </div>
           <div className="agent-tool-list">
@@ -3644,30 +5171,12 @@ function AgentDetailPage({
                   />
                   <span>{tool.enabled ? "启用" : "停用"}</span>
                 </label>
-                <input
-                  value={tool.name}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      tools: item.tools.map((target) => (target.id === tool.id ? { ...target, name: event.target.value } : target)),
-                    }))
-                  }
-                  aria-label="工具名称"
-                />
-                <textarea
-                  value={tool.description}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      tools: item.tools.map((target) => (target.id === tool.id ? { ...target, description: event.target.value } : target)),
-                    }))
-                  }
-                  rows={2}
-                  aria-label="工具说明"
-                />
-                <button className="ghost-button compact danger-button" type="button" onClick={() => deleteAgentTool(tool.id)}>
-                  删除
+                <strong className="tool-name">{tool.name}</strong>
+                <p className="tool-desc">{tool.description}</p>
+                <button className="ghost-button compact danger-button" type="button" onClick={() => onDetachTool(agent.id, tool.id)}>
+                  移除
                 </button>
+                <small className="rule-source">来源：{tool.sourceToolId ? "统一工具库" : "历史关联"}</small>
               </div>
             ))}
           </div>
@@ -3711,51 +5220,217 @@ function AgentDetailPage({
               <Route size={16} />
               工作流步骤
             </span>
-            <button className="ghost-button compact" type="button" onClick={addWorkflowStep}>
-              <Plus size={15} />
-              添加步骤
-            </button>
+            <div className="workflow-header-actions">
+              {skills.length > 0 && (
+                <select
+                  className="skill-apply-select"
+                  defaultValue=""
+                  onChange={(e) => { if (e.target.value) { applySkillToWorkflow(e.target.value); e.target.value = ""; } }}
+                  title="从 Skill 库导入步骤组"
+                >
+                  <option value="" disabled>从 Skill 库导入…</option>
+                  {skills.map((sk) => (
+                    <option key={sk.id} value={sk.id}>{sk.name} {sk.version}</option>
+                  ))}
+                </select>
+              )}
+              <button className="ghost-button compact" type="button" onClick={addWorkflowStep}>
+                <Plus size={15} />
+                添加步骤
+              </button>
+            </div>
           </div>
           <div className="workflow-list">
-            {agent.workflow.map((step, index) => (
-              <div className="workflow-step" key={step.id}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={step.enabled}
-                    onChange={() =>
+            {agent.workflow.map((step, index) => {
+              const skillSource = step.skillRef ? skills.find((sk) => sk.id === step.skillRef) : undefined;
+              const isAnchorOpen = anchorExpanded.has(step.id);
+              const fieldCount = step.anchor?.fields.length ?? 0;
+              return (
+                <div className="workflow-step workflow-step-v2" key={step.id}>
+                  <div className="workflow-step-header">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={step.enabled}
+                        onChange={() =>
+                          onUpdateAgent(agent.id, (item) => ({
+                            ...item,
+                            workflow: item.workflow.map((t) => (t.id === step.id ? { ...t, enabled: !t.enabled } : t)),
+                          }))
+                        }
+                      />
+                      <span>{index + 1}</span>
+                    </label>
+                    <input
+                      className="workflow-step-title"
+                      value={step.title}
+                      onChange={(event) =>
+                        onUpdateAgent(agent.id, (item) => ({
+                          ...item,
+                          workflow: item.workflow.map((t) => (t.id === step.id ? { ...t, title: event.target.value } : t)),
+                        }))
+                      }
+                    />
+                    {skillSource && (
+                      <span className="workflow-skill-badge">
+                        <Layers3 size={11} />
+                        {skillSource.name}
+                      </span>
+                    )}
+                    <button
+                      className={`ghost-button compact workflow-anchor-toggle ${isAnchorOpen ? "active" : ""}`}
+                      type="button"
+                      onClick={() => toggleAnchorExpanded(step.id)}
+                      title="配置输出锚点"
+                    >
+                      <ShieldCheck size={13} />
+                      输出锚点{fieldCount > 0 ? ` (${fieldCount})` : ""}
+                    </button>
+                    <button className="ghost-button compact danger-button" type="button" onClick={() => deleteWorkflowStep(step.id)}>
+                      删除
+                    </button>
+                  </div>
+
+                  <textarea
+                    className="workflow-step-desc"
+                    value={step.description}
+                    onChange={(event) =>
                       onUpdateAgent(agent.id, (item) => ({
                         ...item,
-                        workflow: item.workflow.map((target) => (target.id === step.id ? { ...target, enabled: !target.enabled } : target)),
+                        workflow: item.workflow.map((t) => (t.id === step.id ? { ...t, description: event.target.value } : t)),
                       }))
                     }
+                    rows={2}
+                    placeholder="描述这一步的业务目的（自由文本，Agent 依此执行）"
                   />
-                  <span>{index + 1}</span>
-                </label>
-                <input
-                  value={step.title}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      workflow: item.workflow.map((target) => (target.id === step.id ? { ...target, title: event.target.value } : target)),
-                    }))
-                  }
-                />
-                <textarea
-                  value={step.description}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      workflow: item.workflow.map((target) => (target.id === step.id ? { ...target, description: event.target.value } : target)),
-                    }))
-                  }
-                  rows={2}
-                />
-                <button className="ghost-button compact danger-button" type="button" onClick={() => deleteWorkflowStep(step.id)}>
-                  删除
-                </button>
-              </div>
-            ))}
+
+                  {isAnchorOpen && (
+                    <div className="anchor-editor">
+                      <div className="anchor-editor-head">
+                        <span>输出锚点字段</span>
+                        <label className="anchor-strict-toggle">
+                          <input
+                            type="checkbox"
+                            checked={step.anchor?.strict ?? true}
+                            onChange={(e) =>
+                              onUpdateAgent(agent.id, (item) => ({
+                                ...item,
+                                workflow: item.workflow.map((t) =>
+                                  t.id === step.id ? { ...t, anchor: { ...(t.anchor ?? { fields: [] }), strict: e.target.checked } } : t,
+                                ),
+                              }))
+                            }
+                          />
+                          严格模式（字段缺失即失败）
+                        </label>
+                      </div>
+                      {(step.anchor?.fields ?? []).map((field) => (
+                        <div className="anchor-field-row" key={field.id}>
+                          <input
+                            className="anchor-field-key"
+                            value={field.key}
+                            placeholder="字段名"
+                            onChange={(e) => updateAnchorField(step.id, field.id, { key: e.target.value })}
+                          />
+                          <select
+                            value={field.type}
+                            onChange={(e) => updateAnchorField(step.id, field.id, { type: e.target.value as AnchorField["type"] })}
+                          >
+                            <option value="enum">enum</option>
+                            <option value="bool">bool</option>
+                            <option value="text">text</option>
+                            <option value="number">number</option>
+                            <option value="list">list</option>
+                          </select>
+                          {field.type === "enum" && (
+                            <input
+                              className="anchor-field-options"
+                              value={field.options?.join(",") ?? ""}
+                              placeholder="选项A,选项B,选项C"
+                              onChange={(e) => updateAnchorField(step.id, field.id, { options: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
+                            />
+                          )}
+                          <label className="anchor-required">
+                            <input
+                              type="checkbox"
+                              checked={field.required}
+                              onChange={(e) => updateAnchorField(step.id, field.id, { required: e.target.checked })}
+                            />
+                            必填
+                          </label>
+                          <input
+                            className="anchor-field-desc"
+                            value={field.description}
+                            placeholder="字段含义说明"
+                            onChange={(e) => updateAnchorField(step.id, field.id, { description: e.target.value })}
+                          />
+                          <input
+                            className="anchor-field-constraint"
+                            value={field.constraint ?? ""}
+                            placeholder="跨字段约束（选填）"
+                            onChange={(e) => updateAnchorField(step.id, field.id, { constraint: e.target.value || undefined })}
+                          />
+                          <button
+                            className="ghost-button compact danger-button"
+                            type="button"
+                            onClick={() => removeAnchorField(step.id, field.id)}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                      <button className="ghost-button compact anchor-add-field" type="button" onClick={() => addAnchorField(step.id)}>
+                        <Plus size={13} />
+                        添加字段
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Routing Rules */}
+                  <div className="routing-section">
+                    <div className="routing-section-head">
+                      <span>
+                        <ArrowRight size={13} />
+                        路由规则
+                      </span>
+                      <button className="ghost-button compact" type="button" onClick={() => addRoutingRule(step.id)}>
+                        <Plus size={13} />
+                        添加路由
+                      </button>
+                    </div>
+                    {(step.routing ?? []).length === 0 ? (
+                      <p className="routing-empty">无路由规则（步骤按顺序执行）</p>
+                    ) : (
+                      (step.routing ?? []).map((rt) => (
+                        <div className="routing-rule-row" key={rt.id}>
+                          <input
+                            className="routing-condition"
+                            value={rt.condition}
+                            placeholder="触发条件（如 risk_level=高）"
+                            onChange={(e) => updateRoutingRule(step.id, rt.id, { condition: e.target.value })}
+                          />
+                          <ArrowRight size={13} className="routing-arrow" />
+                          <select
+                            className="routing-target"
+                            value={rt.nextStepId}
+                            onChange={(e) => updateRoutingRule(step.id, rt.id, { nextStepId: e.target.value })}
+                          >
+                            <option value="">→ 下一步（默认）</option>
+                            {agent.workflow.filter((s) => s.id !== step.id).map((s, i) => (
+                              <option key={s.id} value={s.id}>→ 步骤 {i + 1}：{s.title}</option>
+                            ))}
+                            <option value="__end__">→ 终止流程</option>
+                          </select>
+                          <button className="ghost-button compact danger-button" type="button" onClick={() => removeRoutingRule(step.id, rt.id)}>
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
 
@@ -3783,6 +5458,41 @@ function AgentDetailPage({
                 <span>{doc.title}</span>
               </label>
             ))}
+          </div>
+          <div className="retrieval-config-panel">
+            <div className="retrieval-config-row">
+              <label className="retrieval-config-label">Top-K</label>
+              <input
+                type="number"
+                className="retrieval-topk-input"
+                min={1}
+                max={20}
+                value={agent.retrievalConfig?.topK ?? 4}
+                onChange={(e) =>
+                  onUpdateAgent(agent.id, (item) => ({
+                    ...item,
+                    retrievalConfig: { ...(item.retrievalConfig ?? { tagFilters: [] }), topK: Math.max(1, Number(e.target.value)) },
+                  }))
+                }
+              />
+            </div>
+            <div className="retrieval-config-row">
+              <label className="retrieval-config-label">标签过滤</label>
+              <input
+                className="retrieval-tags-input"
+                value={(agent.retrievalConfig?.tagFilters ?? []).join(",")}
+                placeholder="标签A,标签B（逗号分隔）"
+                onChange={(e) =>
+                  onUpdateAgent(agent.id, (item) => ({
+                    ...item,
+                    retrievalConfig: {
+                      ...(item.retrievalConfig ?? { topK: 4 }),
+                      tagFilters: e.target.value.split(",").map((t) => t.trim()).filter(Boolean),
+                    },
+                  }))
+                }
+              />
+            </div>
           </div>
           <button className="ghost-button compact" type="button" onClick={onOpenKnowledge}>
             查看统一知识库
@@ -3814,62 +5524,86 @@ function AgentDetailPage({
             </button>
           </div>
           <div className="rule-list">
-            {agent.rules.map((rule) => (
-              <div className="rule-card editable-rule" key={rule.id}>
-                <label className="rule-switch">
-                  <input
-                    type="checkbox"
-                    checked={rule.enabled}
-                    onChange={() =>
-                      onUpdateAgentRule(agent.id, rule.id, {
-                        enabled: !rule.enabled,
-                      })
-                    }
-                  />
-                  <span>{rule.enabled ? "启用" : "停用"}</span>
-                </label>
-                <select
-                  value={rule.priority}
-                  onChange={(event) =>
-                    onUpdateAgentRule(agent.id, rule.id, {
-                      priority: event.target.value as "高" | "中" | "低",
-                    })
-                  }
-                  aria-label={`${rule.title} 优先级`}
-                >
-                  <option value="高">高</option>
-                  <option value="中">中</option>
-                  <option value="低">低</option>
-                </select>
-                <input
-                  value={rule.title}
-                  onChange={(event) =>
-                    onUpdateAgentRule(agent.id, rule.id, {
-                      title: event.target.value,
-                    })
-                  }
-                  aria-label="规则名称"
-                />
-                <textarea
-                  value={rule.description}
-                  onChange={(event) =>
-                    onUpdateAgentRule(agent.id, rule.id, {
-                      description: event.target.value,
-                    })
-                  }
-                  aria-label="规则说明"
-                  rows={2}
-                />
-                <button
-                  className="ghost-button compact danger-button"
-                  type="button"
-                  onClick={() => onDetachRule(agent.id, rule.id)}
-                >
-                  移除
-                </button>
-                <small className="rule-source">来源：{rule.sourceRuleId ? "统一规则库" : "本地规则"}</small>
-              </div>
-            ))}
+            {agent.rules.map((rule) => {
+              const isShared = !!rule.sourceRuleId;
+              return (
+                <div className={`rule-card editable-rule ${isShared ? "rule-shared" : "rule-draft"}`} key={rule.id}>
+                  <div className="rule-card-top">
+                    <label className="rule-switch">
+                      <input
+                        type="checkbox"
+                        checked={rule.enabled}
+                        onChange={() => onUpdateAgentRule(agent.id, rule.id, { enabled: !rule.enabled })}
+                      />
+                      <span>{rule.enabled ? "启用" : "停用"}</span>
+                    </label>
+                    <select
+                      value={rule.priority}
+                      onChange={(event) => onUpdateAgentRule(agent.id, rule.id, { priority: event.target.value as "高" | "中" | "低" })}
+                      aria-label={`${rule.title} 优先级`}
+                    >
+                      <option value="高">高</option>
+                      <option value="中">中</option>
+                      <option value="低">低</option>
+                    </select>
+                    {isShared ? (
+                      <span className="rule-isolation-badge badge-shared">共享规则</span>
+                    ) : (
+                      <select
+                        className="rule-isolation-select"
+                        value={rule.isolationType ?? "create"}
+                        onChange={(e) => onUpdateAgentRule(agent.id, rule.id, { isolationType: e.target.value as RuleItem["isolationType"] })}
+                        title="草稿规则的隔离类型"
+                      >
+                        <option value="create">新建草稿</option>
+                        <option value="content">内容变更申请</option>
+                      </select>
+                    )}
+                  </div>
+
+                  {isShared ? (
+                    <>
+                      <strong className="rule-title-readonly">{rule.title}</strong>
+                      <p className="rule-desc-readonly">{rule.description}</p>
+                    </>
+                  ) : (
+                    <>
+                      <input
+                        value={rule.title}
+                        onChange={(event) => onUpdateAgentRule(agent.id, rule.id, { title: event.target.value })}
+                        aria-label="规则名称"
+                      />
+                      <textarea
+                        value={rule.description}
+                        onChange={(event) => onUpdateAgentRule(agent.id, rule.id, { description: event.target.value })}
+                        aria-label="规则说明"
+                        rows={2}
+                      />
+                    </>
+                  )}
+
+                  <div className="rule-card-actions">
+                    {!isShared && (
+                      <button
+                        className="ghost-button compact"
+                        type="button"
+                        onClick={() => onPromoteRule(agent.id, rule.id)}
+                        title="提升为所有 Agent 均可引用的共享规则"
+                      >
+                        提升为共享规则
+                      </button>
+                    )}
+                    <button
+                      className="ghost-button compact danger-button"
+                      type="button"
+                      onClick={() => onDetachRule(agent.id, rule.id)}
+                    >
+                      移除
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
 
@@ -3906,17 +5640,36 @@ function AgentDetailPage({
                   <span>评测样例</span>
                 </div>
                 <div>
-                  <strong>{linkedDocs.length}</strong>
-                  <span>知识片段</span>
+                  <strong>{agent.testCases.filter((c) => c.split === "train").length}</strong>
+                  <span className="split-label">训练集</span>
                 </div>
                 <div>
-                  <strong>{enabledRules}</strong>
-                  <span>启用规则</span>
+                  <strong>{agent.testCases.filter((c) => c.split === "holdout").length}</strong>
+                  <span className="split-label">留出集</span>
                 </div>
                 <div>
                   <strong>{agentBlueprint.qualityTarget}</strong>
                   <span>质量门槛</span>
                 </div>
+              </div>
+              <div className="judge-phase-row">
+                <span className="judge-phase-label">Judge 校准阶段</span>
+                <select
+                  className="judge-phase-select"
+                  value={agent.judgePhase ?? "human"}
+                  onChange={(e) =>
+                    onUpdateAgent(agent.id, (item) => ({ ...item, judgePhase: e.target.value as Agent["judgePhase"] }))
+                  }
+                >
+                  <option value="human">人工标注（前 20 条）</option>
+                  <option value="parallel">平行验证（20-50 条）</option>
+                  <option value="auto">自动裁判（50+ 条）</option>
+                </select>
+                {agent.judgePhase && (
+                  <span className={`judge-phase-badge phase-${agent.judgePhase}`}>
+                    {agent.judgePhase === "human" ? "人工标注" : agent.judgePhase === "parallel" ? "平行验证" : "自动裁判"}
+                  </span>
+                )}
               </div>
 
               <div className="training-actions">
@@ -3993,6 +5746,109 @@ function AgentDetailPage({
             <ReportCard report={agent.afterReport} active={agent.trainedOnce} />
           </div>
 
+        </section>
+
+        <section className={paneClass("detail-training", "panel span-2 rubric-panel")}>
+          <div className="section-title with-action">
+            <span>
+              <ShieldCheck size={16} />
+              Rubric 评分标准
+            </span>
+            <button className="ghost-button compact" type="button" onClick={addRubricCriterion}>
+              <Plus size={15} />
+              添加维度
+            </button>
+          </div>
+          <p className="section-hint">Rubric 是评估的唯一标准。Judge 校准前必须先确认 Rubric，用于 LLM 自动打分与人工判断的一致性校验。</p>
+          {(agent.rubric ?? []).length > 0 ? (
+            <div className="rubric-table">
+              <div className="rubric-head">
+                <span>评估维度</span>
+                <span>权重</span>
+                <span>打分指引</span>
+                <span />
+              </div>
+              {(agent.rubric ?? []).map((criterion) => (
+                <div className="rubric-row" key={criterion.id}>
+                  <input
+                    value={criterion.dimension}
+                    onChange={(e) =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        rubric: (item.rubric ?? []).map((r) => (r.id === criterion.id ? { ...r, dimension: e.target.value } : r)),
+                      }))
+                    }
+                  />
+                  <div className="rubric-weight-cell">
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={criterion.weight}
+                      onChange={(e) =>
+                        onUpdateAgent(agent.id, (item) => ({
+                          ...item,
+                          rubric: (item.rubric ?? []).map((r) =>
+                            r.id === criterion.id ? { ...r, weight: Number(e.target.value) } : r,
+                          ),
+                        }))
+                      }
+                    />
+                    <span>%</span>
+                  </div>
+                  <input
+                    value={criterion.guide}
+                    onChange={(e) =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        rubric: (item.rubric ?? []).map((r) => (r.id === criterion.id ? { ...r, guide: e.target.value } : r)),
+                      }))
+                    }
+                  />
+                  <button className="ghost-button compact danger-button" type="button" onClick={() => deleteRubricCriterion(criterion.id)}>
+                    删除
+                  </button>
+                </div>
+              ))}
+              <div className="rubric-total">
+                <span>合计权重</span>
+                <strong
+                  className={(agent.rubric ?? []).reduce((s, r) => s + r.weight, 0) === 100 ? "weight-ok" : "weight-warn"}
+                >
+                  {(agent.rubric ?? []).reduce((s, r) => s + r.weight, 0)}%
+                </strong>
+                {(agent.rubric ?? []).reduce((s, r) => s + r.weight, 0) !== 100 && (
+                  <small>各维度权重之和应为 100%</small>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="empty-whitebox">
+              <p>暂无 Rubric。点击"添加维度"手动定义，或使用"AI 辅助立标准"功能让系统从你的判断中反推。</p>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  onUpdateAgent(agent.id, (item) => ({
+                    ...item,
+                    rubric: [
+                      { id: `rub-${Date.now()}`, dimension: "任务完成度", weight: 40, guide: "正确完成核心业务判断，不遗漏关键项" },
+                      { id: `rub-${Date.now() + 1}`, dimension: "规则命中", weight: 30, guide: "命中所有适用规则，给出可追溯证据" },
+                      { id: `rub-${Date.now() + 2}`, dimension: "建议可执行性", weight: 20, guide: "给出具体可落地的处理建议" },
+                      { id: `rub-${Date.now() + 3}`, dimension: "表述清晰", weight: 10, guide: "输出结构完整，表达清晰易读" },
+                    ],
+                  }));
+                  onNotify("已生成通用 Rubric 模板，可按业务需求调整");
+                }}
+              >
+                <Sparkles size={15} />
+                AI 辅助立标准（模拟）
+              </button>
+            </div>
+          )}
+        </section>
+
+        <section className={paneClass("detail-training", "panel span-2")}>
           <div className="feedback-box studio-feedback">
             <div>
               <div className="section-title small">
@@ -4036,21 +5892,38 @@ function AgentDetailPage({
           <div className="case-grid">
             {agent.testCases.map((testCase) => (
               <div className="case-card editable" key={testCase.id}>
-                <select
-                  value={testCase.status}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      testCases: item.testCases.map((target) =>
-                        target.id === testCase.id ? { ...target, status: event.target.value as "通过" | "待验证" | "需优化" } : target,
-                      ),
-                    }))
-                  }
-                >
-                  <option value="通过">通过</option>
-                  <option value="待验证">待验证</option>
-                  <option value="需优化">需优化</option>
-                </select>
+                <div className="case-card-meta-row">
+                  <select
+                    value={testCase.status}
+                    onChange={(event) =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        testCases: item.testCases.map((target) =>
+                          target.id === testCase.id ? { ...target, status: event.target.value as "通过" | "待验证" | "需优化" } : target,
+                        ),
+                      }))
+                    }
+                  >
+                    <option value="通过">通过</option>
+                    <option value="待验证">待验证</option>
+                    <option value="需优化">需优化</option>
+                  </select>
+                  <button
+                    className={`case-split-toggle ${testCase.split === "holdout" ? "holdout" : "train"}`}
+                    type="button"
+                    title="点击切换训练集/留出集"
+                    onClick={() =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        testCases: item.testCases.map((t) =>
+                          t.id === testCase.id ? { ...t, split: t.split === "holdout" ? "train" : "holdout" } : t,
+                        ),
+                      }))
+                    }
+                  >
+                    {testCase.split === "holdout" ? "留出集" : "训练集"}
+                  </button>
+                </div>
                 <input
                   value={testCase.name}
                   onChange={(event) =>
@@ -4080,6 +5953,57 @@ function AgentDetailPage({
                   }
                   rows={2}
                 />
+                <div className="case-judgment-row">
+                  <span className="case-judgment-label">你的判断</span>
+                  <button
+                    className={`judgment-btn pass ${testCase.judgment === "pass" ? "active" : ""}`}
+                    type="button"
+                    aria-label="输出符合预期"
+                    onClick={() =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        testCases: item.testCases.map((t) =>
+                          t.id === testCase.id ? { ...t, judgment: t.judgment === "pass" ? null : "pass" } : t,
+                        ),
+                      }))
+                    }
+                  >
+                    <ThumbsUp size={13} />
+                    符合预期
+                  </button>
+                  <button
+                    className={`judgment-btn fail ${testCase.judgment === "fail" ? "active" : ""}`}
+                    type="button"
+                    aria-label="输出有问题"
+                    onClick={() =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        testCases: item.testCases.map((t) =>
+                          t.id === testCase.id ? { ...t, judgment: t.judgment === "fail" ? null : "fail" } : t,
+                        ),
+                      }))
+                    }
+                  >
+                    <ThumbsDown size={13} />
+                    有问题
+                  </button>
+                </div>
+                {testCase.judgment === "fail" && (
+                  <textarea
+                    className="judgment-note"
+                    value={testCase.judgmentNote ?? ""}
+                    placeholder="说说哪里有问题（可选，作为训练信号）"
+                    rows={2}
+                    onChange={(event) =>
+                      onUpdateAgent(agent.id, (item) => ({
+                        ...item,
+                        testCases: item.testCases.map((t) =>
+                          t.id === testCase.id ? { ...t, judgmentNote: event.target.value } : t,
+                        ),
+                      }))
+                    }
+                  />
+                )}
                 <button className="ghost-button compact danger-button" type="button" onClick={() => deleteTestCase(testCase.id)}>
                   删除用例
                 </button>

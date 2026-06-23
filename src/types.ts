@@ -1,5 +1,5 @@
 export type AgentStatus = "draft" | "trained" | "published";
-export type ViewName = "matrix" | "agents" | "knowledge" | "rules" | "tools" | "evaluation" | "api" | "detail";
+export type ViewName = "matrix" | "agents" | "knowledge" | "rules" | "tools" | "evaluation" | "api" | "detail" | "skills";
 
 export interface FlowItem {
   id: string;
@@ -23,6 +23,7 @@ export interface RuleItem {
   description: string;
   priority: "高" | "中" | "低";
   enabled: boolean;
+  isolationType?: "binding" | "create" | "content";
 }
 
 export interface RuleLibraryItem {
@@ -37,9 +38,31 @@ export interface RuleLibraryItem {
 
 export interface ToolItem {
   id: string;
+  sourceToolId?: string;
   name: string;
   description: string;
   enabled: boolean;
+}
+
+export interface AnchorField {
+  id: string;
+  key: string;
+  type: "enum" | "bool" | "text" | "number" | "list";
+  options?: string[];
+  required: boolean;
+  description: string;
+  constraint?: string;
+}
+
+export interface OutputAnchor {
+  fields: AnchorField[];
+  strict: boolean;
+}
+
+export interface RoutingRule {
+  id: string;
+  condition: string;
+  nextStepId: string;
 }
 
 export interface WorkflowStep {
@@ -47,6 +70,26 @@ export interface WorkflowStep {
   title: string;
   description: string;
   enabled: boolean;
+  skillRef?: string;
+  anchor?: OutputAnchor;
+  routing?: RoutingRule[];
+}
+
+export interface SkillStep {
+  title: string;
+  description: string;
+  anchor?: OutputAnchor;
+}
+
+export interface Skill {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  category: string;
+  steps: SkillStep[];
+  linkedAgentCount: number;
+  updatedAt: string;
 }
 
 export interface TimelineItem {
@@ -73,6 +116,9 @@ export interface TestCase {
   input: string;
   expected: string;
   status: "通过" | "待验证" | "需优化";
+  judgment?: "pass" | "fail" | null;
+  judgmentNote?: string;
+  split?: "train" | "holdout";
 }
 
 export interface ToolAsset {
@@ -113,6 +159,67 @@ export interface TrainingReport {
   meta: Array<{ label: string; value: string }>;
 }
 
+// ── Whitebox trainable units ──────────────────────────────────────────────────
+
+export interface InstructionSegment {
+  id: string;
+  label: "角色" | "任务" | "约束" | "输出格式";
+  content: string;
+}
+
+export interface FewShotExample {
+  id: string;
+  input: string;
+  output: string;
+}
+
+export interface RetrievalConfig {
+  topK: number;
+  tagFilters: string[];
+}
+
+export interface RubricCriterion {
+  id: string;
+  dimension: string;
+  weight: number;
+  guide: string;
+}
+
+// ── Failure Cluster ────────────────────────────────────────────────────────────
+
+export type ProposalTargetUnit = "few-shot" | "rule" | "retrieval" | "instruction" | "parameter";
+
+export interface FailureCluster {
+  id: string;
+  label: string;
+  caseCount: number;
+  diagnosis: string;
+  targetUnit: ProposalTargetUnit;
+}
+
+// ── Proposal (training diff card) ─────────────────────────────────────────────
+
+export type ProposalStatus = "pending" | "accepted" | "edited" | "rejected";
+
+export interface Proposal {
+  id: string;
+  unit: ProposalTargetUnit;
+  unitLabel: string;
+  before: string;
+  after: string;
+  reason: string;
+  triggerCase: string;
+  status: ProposalStatus;
+  editedContent?: string;
+  riskFlag?: boolean;
+  clusterId?: string;
+  dependsOn?: string[];
+  conflictsWith?: string[];
+  ruleIsolationType?: "binding" | "create" | "content";
+}
+
+// ── Agent ─────────────────────────────────────────────────────────────────────
+
 export interface Agent {
   id: string;
   name: string;
@@ -142,6 +249,12 @@ export interface Agent {
   apiCalls: ApiCall[];
   testCases: TestCase[];
   shallow?: boolean;
+  // Whitebox trainable units
+  instructionSegments?: InstructionSegment[];
+  fewShots?: FewShotExample[];
+  retrievalConfig?: RetrievalConfig;
+  rubric?: RubricCriterion[];
+  judgePhase?: "human" | "parallel" | "auto";
 }
 
 export interface AppState {
@@ -151,4 +264,5 @@ export interface AppState {
   tools: ToolAsset[];
   evalRuns: EvalRun[];
   apiKeys: ApiKeyRecord[];
+  skills: Skill[];
 }
