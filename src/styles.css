@@ -4576,6 +4576,10 @@ textarea:focus {
 /* ── Workflow Step v2 (in Agent Detail) ─────────────────────────────────── */
 
 .workflow-step-v2 {
+  display: block;         /* override the 4-col grid from .workflow-step */
+  padding: 0;             /* each inner section handles its own padding */
+  gap: 0;
+  align-items: unset;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
