@@ -208,16 +208,59 @@ const agentBlueprints: AgentBlueprint[] = [
       "你是滴灌通合同审查 Agent。请基于统一知识库、合同规则和业务上下文审查合同，必须输出风险等级、命中规则、修改建议和是否需要人工复核。不得生成未经验证的法律结论。",
     guardrails: ["高风险条款必须触发人工复核", "不得引用未关联知识库", "输出必须包含风险等级和修改建议", "不确定时给出缺失字段清单"],
     tools: [
-      { id: "search", name: "知识检索", description: "检索合同审查标准、现金流资产规则和披露清单。", enabled: true },
-      { id: "rule", name: "规则校验", description: "逐条命中收益分配、终止条款、数据授权等规则。", enabled: true },
-      { id: "report", name: "报告生成", description: "生成风险等级、修改建议和审查结论。", enabled: true },
-      { id: "handoff", name: "人工复核", description: "高风险或低置信度条款进入人工复核队列。", enabled: true },
+      { id: "search", sourceToolId: "tool-knowledge-search", name: "知识检索", description: "检索合同审查标准、现金流资产规则和披露清单。", enabled: true },
+      { id: "rule", sourceToolId: "tool-rule-check", name: "规则校验", description: "逐条命中收益分配、终止条款、数据授权等规则。", enabled: true },
+      { id: "report", sourceToolId: "tool-report", name: "报告生成", description: "生成风险等级、修改建议和审查结论。", enabled: true },
+      { id: "handoff", sourceToolId: "tool-human-review", name: "人工复核", description: "高风险或低置信度条款进入人工复核队列。", enabled: true },
     ],
     workflow: [
-      { id: "w1", title: "解析合同材料", description: "抽取主体、收益口径、终止条款、授权范围和附件版本。", enabled: true },
-      { id: "w2", title: "检索业务标准", description: "按节点、条款类型和标签检索统一知识库。", enabled: true },
-      { id: "w3", title: "执行规则校验", description: "对收益分配、披露一致性、提前终止、争议处理逐项打标。", enabled: true },
-      { id: "w4", title: "生成审查报告", description: "输出风险、证据、修改建议和人工复核建议。", enabled: true },
+      {
+        id: "w1", title: "解析合同材料", description: "抽取主体、收益口径、终止条款、授权范围和附件版本。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w1f1", key: "contract_type", type: "enum", options: ["现金流收益权", "融资租赁", "供应链票据", "其他"], required: true, description: "合同类型" },
+            { id: "w1f2", key: "parties", type: "list", required: true, description: "合同各方主体名称列表" },
+            { id: "w1f3", key: "key_clauses", type: "list", required: true, description: "提取到的关键条款列表（收益分配/终止/授权等）" },
+            { id: "w1f4", key: "doc_version", type: "text", required: false, description: "合同/披露材料版本号" },
+          ],
+        },
+      },
+      {
+        id: "w2", title: "检索业务标准", description: "按节点、条款类型和标签检索统一知识库。", enabled: true,
+        anchor: {
+          strict: false,
+          fields: [
+            { id: "w2f1", key: "matched_docs", type: "list", required: true, description: "命中知识库文档 ID 列表" },
+            { id: "w2f2", key: "relevance", type: "enum", options: ["高", "中", "低"], required: true, description: "整体检索相关性评级" },
+            { id: "w2f3", key: "coverage_gap", type: "bool", required: true, description: "是否存在知识库未覆盖的条款类型" },
+          ],
+        },
+      },
+      {
+        id: "w3", title: "执行规则校验", description: "对收益分配、披露一致性、提前终止、争议处理逐项打标。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w3f1", key: "violated_rules", type: "list", required: true, description: "命中的规则 ID 和名称列表" },
+            { id: "w3f2", key: "risk_level", type: "enum", options: ["低", "中", "高"], required: true, description: "综合规则校验后的风险等级" },
+            { id: "w3f3", key: "requires_human_review", type: "bool", required: true, description: "是否需要进入人工复核队列", constraint: "若 risk_level=高 则必须为 true" },
+          ],
+        },
+      },
+      {
+        id: "w4", title: "生成审查报告", description: "输出风险、证据、修改建议和人工复核建议。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w4f1", key: "conclusion", type: "enum", options: ["通过", "需关注", "拒绝"], required: true, description: "最终审查结论" },
+            { id: "w4f2", key: "risk_level", type: "enum", options: ["低", "中", "高"], required: true, description: "最终风险等级" },
+            { id: "w4f3", key: "modification_suggestions", type: "list", required: true, description: "具体修改建议列表，每条一句话" },
+            { id: "w4f4", key: "human_review_points", type: "list", required: false, description: "需人工核实的疑点清单" },
+            { id: "w4f5", key: "human_review_required", type: "bool", required: true, description: "是否提交人工复核" },
+          ],
+        },
+      },
     ],
     testCases: [
       {
@@ -226,6 +269,7 @@ const agentBlueprints: AgentBlueprint[] = [
         input: "合同约定按经营收入分配，但未说明扣除项和周期。",
         expected: "识别为高风险，要求补充扣除项、分配周期和披露一致性。",
         status: "待验证",
+        split: "train" as const,
       },
       {
         id: "tc-contract-termination",
@@ -233,6 +277,7 @@ const agentBlueprints: AgentBlueprint[] = [
         input: "发行方可单方提前终止且未写投资者保护安排。",
         expected: "命中提前终止规则，建议人工复核。",
         status: "待验证",
+        split: "holdout" as const,
       },
     ],
     trace: ["解析合同输入", "检索合同审查标准", "命中收益分配规则", "调用报告生成", "输出人工复核建议"],
@@ -273,16 +318,56 @@ const agentBlueprints: AgentBlueprint[] = [
       "你是系统工单分诊 Agent。请根据工单影响范围、业务环节和结算影响输出分类、优先级、责任团队和处理摘要。P0/P1 必须提示人工确认。",
     guardrails: ["不得承诺修复时间", "P0/P1 必须人工确认", "责任团队必须来自已配置范围"],
     tools: [
-      { id: "classify", name: "工单分类", description: "识别 COP、结算、门店数据、账户权限等问题类型。", enabled: true },
-      { id: "route", name: "责任方路由", description: "根据业务域和影响范围推荐处理团队。", enabled: true },
-      { id: "sla", name: "优先级判断", description: "结合现金流影响、门店范围和阻塞程度给出 P 级。", enabled: true },
-      { id: "summary", name: "摘要生成", description: "将原始工单改写为可执行处理摘要。", enabled: true },
+      { id: "classify", sourceToolId: "tool-knowledge-search", name: "工单分类", description: "识别 COP、结算、门店数据、账户权限等问题类型。", enabled: true },
+      { id: "route", sourceToolId: "tool-ticket-route", name: "责任方路由", description: "根据业务域和影响范围推荐处理团队。", enabled: true },
+      { id: "sla", sourceToolId: "tool-rule-check", name: "优先级判断", description: "结合现金流影响、门店范围和阻塞程度给出 P 级。", enabled: true },
+      { id: "summary", sourceToolId: "tool-report", name: "摘要生成", description: "将原始工单改写为可执行处理摘要。", enabled: true },
     ],
     workflow: [
-      { id: "w1", title: "读取工单", description: "提取问题类型、影响范围和业务环节。", enabled: true },
-      { id: "w2", title: "判断优先级", description: "结合结算影响、门店数量和阻塞程度打 P 级。", enabled: true },
-      { id: "w3", title: "推荐责任方", description: "给出系统、数据、结算或业务运营团队。", enabled: true },
-      { id: "w4", title: "生成处理摘要", description: "输出可直接转派的简洁说明。", enabled: true },
+      {
+        id: "w1", title: "读取工单", description: "提取问题类型、影响范围和业务环节。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w1f1", key: "ticket_type", type: "enum", options: ["COP", "结算", "门店数据", "账户权限", "其他"], required: true, description: "工单问题类型分类" },
+            { id: "w1f2", key: "affected_stores", type: "number", required: true, description: "受影响门店数量" },
+            { id: "w1f3", key: "business_domain", type: "text", required: true, description: "所属业务域（如结算/COP/数据平台）" },
+            { id: "w1f4", key: "blocks_settlement", type: "bool", required: true, description: "是否阻塞当日结算" },
+          ],
+        },
+      },
+      {
+        id: "w2", title: "判断优先级", description: "结合结算影响、门店数量和阻塞程度打 P 级。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w2f1", key: "priority", type: "enum", options: ["P0", "P1", "P2", "P3"], required: true, description: "工单处理优先级", constraint: "若 blocks_settlement=true 且 affected_stores≥5 则 priority 必须为 P0 或 P1" },
+            { id: "w2f2", key: "priority_reason", type: "text", required: true, description: "优先级判断依据说明" },
+            { id: "w2f3", key: "requires_immediate_action", type: "bool", required: true, description: "是否需要立即人工介入" },
+          ],
+        },
+      },
+      {
+        id: "w3", title: "推荐责任方", description: "给出系统、数据、结算或业务运营团队。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w3f1", key: "team", type: "enum", options: ["结算支持", "数据平台", "系统运营", "业务运营", "产品研发"], required: true, description: "推荐处理责任团队" },
+            { id: "w3f2", key: "routing_reason", type: "text", required: true, description: "路由理由" },
+          ],
+        },
+      },
+      {
+        id: "w4", title: "生成处理摘要", description: "输出可直接转派的简洁说明。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w4f1", key: "summary", type: "text", required: true, description: "可直接转派的处理摘要（2-3句话）" },
+            { id: "w4f2", key: "suggested_actions", type: "list", required: false, description: "建议处理步骤列表" },
+            { id: "w4f3", key: "escalate_to_human", type: "bool", required: true, description: "是否需升级人工处理" },
+          ],
+        },
+      },
     ],
     testCases: [
       {
@@ -291,6 +376,7 @@ const agentBlueprints: AgentBlueprint[] = [
         input: "12 家门店结算状态停留在待确认，影响当日结算。",
         expected: "分类为结算异常，优先级至少 P1，责任方为结算支持。",
         status: "待验证",
+        split: "train" as const,
       },
       {
         id: "tc-ticket-cop",
@@ -298,6 +384,7 @@ const agentBlueprints: AgentBlueprint[] = [
         input: "单门店 COP 今日流水未同步，暂未影响结算。",
         expected: "分类为数据同步，优先级 P2 或 P3，建议数据平台排查。",
         status: "待验证",
+        split: "holdout" as const,
       },
     ],
     trace: ["读取工单描述", "提取影响范围", "命中结算优先级规则", "路由责任团队", "生成摘要"],
@@ -338,14 +425,47 @@ const agentBlueprints: AgentBlueprint[] = [
       "你是披露合规检查 Agent。请检查材料是否覆盖资产口径、历史回款、风险提示、投资者适当性和关键假设，并输出缺口清单与补充建议。",
     guardrails: ["不得替代合规负责人最终判断", "缺少证据必须列为缺口", "涉及投资者适当性必须提示复核"],
     tools: [
-      { id: "checklist", name: "清单核对", description: "逐项核对披露与合规检查清单。", enabled: true },
-      { id: "evidence", name: "证据定位", description: "定位材料中的资产口径、历史回款和风险提示证据。", enabled: true },
-      { id: "gap", name: "缺口生成", description: "生成缺失信息和补充建议。", enabled: true },
+      { id: "checklist", sourceToolId: "tool-rule-check", name: "清单核对", description: "逐项核对披露与合规检查清单。", enabled: true },
+      { id: "evidence", sourceToolId: "tool-knowledge-search", name: "证据定位", description: "定位材料中的资产口径、历史回款和风险提示证据。", enabled: true },
+      { id: "gap", sourceToolId: "tool-report", name: "缺口生成", description: "生成缺失信息和补充建议。", enabled: true },
     ],
     workflow: [
-      { id: "w1", title: "材料分段", description: "识别资产说明、回款记录、风险提示和适当性章节。", enabled: true },
-      { id: "w2", title: "清单核对", description: "逐项比对统一检查清单。", enabled: true },
-      { id: "w3", title: "输出缺口", description: "按风险等级输出缺口和补充建议。", enabled: true },
+      {
+        id: "w1", title: "材料分段", description: "识别资产说明、回款记录、风险提示和适当性章节。", enabled: true,
+        anchor: {
+          strict: false,
+          fields: [
+            { id: "w1f1", key: "sections_found", type: "list", required: true, description: "识别到的章节列表（如资产口径/历史回款/风险提示）" },
+            { id: "w1f2", key: "sections_missing", type: "list", required: true, description: "未找到的必要章节列表" },
+            { id: "w1f3", key: "investor_suitability_present", type: "bool", required: true, description: "是否包含投资者适当性章节" },
+          ],
+        },
+      },
+      {
+        id: "w2", title: "清单核对", description: "逐项比对统一检查清单。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w2f1", key: "items_checked", type: "number", required: true, description: "已核对的清单项总数" },
+            { id: "w2f2", key: "items_passed", type: "number", required: true, description: "通过核对的清单项数" },
+            { id: "w2f3", key: "items_failed", type: "list", required: true, description: "未通过的清单项名称列表" },
+            { id: "w2f4", key: "compliance_rate", type: "number", required: true, description: "合规率（百分比，如 85 表示 85%）" },
+          ],
+        },
+      },
+      {
+        id: "w3", title: "输出缺口与建议", description: "按风险等级输出缺口和补充建议。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w3f1", key: "gaps", type: "list", required: true, description: "发现的信息缺口列表，每条一句话" },
+            { id: "w3f2", key: "risk_level", type: "enum", options: ["低", "中", "高"], required: true, description: "整体合规风险等级" },
+            { id: "w3f3", key: "conclusion", type: "enum", options: ["通过", "需关注", "拒绝发行"], required: true, description: "最终复核结论" },
+            { id: "w3f4", key: "reviewer_required", type: "bool", required: true, description: "是否需要合规负责人人工复核", constraint: "若 risk_level=高 或 investor_suitability_present=false 则必须为 true" },
+            { id: "w3f5", key: "suggestions", type: "list", required: true, description: "补充建议列表，每条对应一个缺口" },
+          ],
+        },
+      },
     ],
     testCases: [
       {
@@ -354,6 +474,15 @@ const agentBlueprints: AgentBlueprint[] = [
         input: "披露材料包含资产口径和历史回款，但未列关键风险提示。",
         expected: "识别为高优先级缺口，建议补充风险提示章节。",
         status: "待验证",
+        split: "train" as const,
+      },
+      {
+        id: "tc-compliance-suitability",
+        name: "适当性章节缺失",
+        input: "材料包含风险提示但未单独列出投资者适当性评估章节。",
+        expected: "识别为必要缺口，reviewer_required 为 true，建议补充适当性章节。",
+        status: "待验证",
+        split: "holdout" as const,
       },
     ],
     trace: ["读取披露材料", "检索合规清单", "定位证据片段", "生成缺口清单"],
@@ -841,6 +970,7 @@ function makeNewAgent(name: string, purpose: string, type: string, inputSchema?:
     fewShots: [],
     retrievalConfig: { topK: 4, tagFilters: [] },
     rubric: [],
+    judgePhase: "human",
   };
 }
 

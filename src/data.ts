@@ -270,10 +270,51 @@ const mainAgents: Agent[] = [
     guardrails: ["输出必须为结构化报告", "不得生成未经验证的法律结论", "高风险条款必须建议人工复核"],
     tools: contractTools,
     workflow: [
-      { id: "w1", title: "接收合同材料", description: "读取合同文本、业务背景和门店现金流资产说明。", enabled: true },
-      { id: "w2", title: "检索审查标准", description: "从统一知识库检索合同审查标准和现金流资产规则。", enabled: true },
-      { id: "w3", title: "规则校验", description: "检查收益分配、披露义务、提前终止和争议处理条款。", enabled: true },
-      { id: "w4", title: "输出审查报告", description: "生成风险、建议和结论，并标注是否需要人工复核。", enabled: true },
+      {
+        id: "w1", title: "接收合同材料", description: "读取合同文本、业务背景和门店现金流资产说明。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w1f1", key: "contract_type", type: "enum" as const, options: ["现金流收益权", "融资租赁", "供应链票据", "其他"], required: true, description: "合同类型" },
+            { id: "w1f2", key: "parties", type: "list" as const, required: true, description: "合同各方主体名称" },
+            { id: "w1f3", key: "key_clauses", type: "list" as const, required: true, description: "提取到的关键条款列表" },
+            { id: "w1f4", key: "doc_version", type: "text" as const, required: false, description: "材料版本号" },
+          ],
+        },
+      },
+      {
+        id: "w2", title: "检索审查标准", description: "从统一知识库检索合同审查标准和现金流资产规则。", enabled: true,
+        anchor: {
+          strict: false,
+          fields: [
+            { id: "w2f1", key: "matched_docs", type: "list" as const, required: true, description: "命中知识库文档列表" },
+            { id: "w2f2", key: "relevance", type: "enum" as const, options: ["高", "中", "低"], required: true, description: "检索相关性" },
+          ],
+        },
+      },
+      {
+        id: "w3", title: "规则校验", description: "检查收益分配、披露义务、提前终止和争议处理条款。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w3f1", key: "violated_rules", type: "list" as const, required: true, description: "命中规则列表" },
+            { id: "w3f2", key: "risk_level", type: "enum" as const, options: ["低", "中", "高"], required: true, description: "综合风险等级" },
+            { id: "w3f3", key: "requires_human_review", type: "bool" as const, required: true, description: "是否需要人工复核", constraint: "若 risk_level=高 则必须为 true" },
+          ],
+        },
+      },
+      {
+        id: "w4", title: "输出审查报告", description: "生成风险、建议和结论，并标注是否需要人工复核。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "w4f1", key: "conclusion", type: "enum" as const, options: ["通过", "需关注", "拒绝"], required: true, description: "最终审查结论" },
+            { id: "w4f2", key: "risk_level", type: "enum" as const, options: ["低", "中", "高"], required: true, description: "最终风险等级" },
+            { id: "w4f3", key: "modification_suggestions", type: "list" as const, required: true, description: "具体修改建议列表" },
+            { id: "w4f4", key: "human_review_required", type: "bool" as const, required: true, description: "是否提交人工复核" },
+          ],
+        },
+      },
     ],
     knowledgeIds: ["doc-contract-standard", "doc-cashflow-asset", "doc-compliance-check"],
     rules: [
@@ -385,9 +426,38 @@ const mainAgents: Agent[] = [
     guardrails: ["P0/P1 工单必须提示人工确认", "不得直接承诺修复时间", "责任团队必须来自已配置团队"],
     tools: systemTools,
     workflow: [
-      { id: "s1", title: "读取工单", description: "解析问题描述、影响对象、截图说明和业务时间点。", enabled: true },
-      { id: "s2", title: "判断优先级", description: "结合影响范围、现金流阻塞和结算影响判断 P 级。", enabled: true },
-      { id: "s3", title: "推荐责任方", description: "输出 COP、数据平台、结算或门店运营团队。", enabled: true },
+      {
+        id: "s1", title: "读取工单", description: "解析问题描述、影响对象、截图说明和业务时间点。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "s1f1", key: "ticket_type", type: "enum" as const, options: ["COP", "结算", "门店数据", "账户权限", "其他"], required: true, description: "工单类型" },
+            { id: "s1f2", key: "affected_stores", type: "number" as const, required: true, description: "受影响门店数量" },
+            { id: "s1f3", key: "blocks_settlement", type: "bool" as const, required: true, description: "是否阻塞结算" },
+          ],
+        },
+      },
+      {
+        id: "s2", title: "判断优先级", description: "结合影响范围、现金流阻塞和结算影响判断 P 级。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "s2f1", key: "priority", type: "enum" as const, options: ["P0", "P1", "P2", "P3"], required: true, description: "工单优先级", constraint: "若 blocks_settlement=true 且 affected_stores≥5 则必须为 P0 或 P1" },
+            { id: "s2f2", key: "priority_reason", type: "text" as const, required: true, description: "优先级判断依据" },
+          ],
+        },
+      },
+      {
+        id: "s3", title: "推荐责任方", description: "输出 COP、数据平台、结算或门店运营团队。", enabled: true,
+        anchor: {
+          strict: true,
+          fields: [
+            { id: "s3f1", key: "team", type: "enum" as const, options: ["结算支持", "数据平台", "系统运营", "业务运营"], required: true, description: "推荐责任团队" },
+            { id: "s3f2", key: "summary", type: "text" as const, required: true, description: "处理摘要（2-3句）" },
+            { id: "s3f3", key: "escalate_to_human", type: "bool" as const, required: true, description: "是否需要人工升级处理" },
+          ],
+        },
+      },
     ],
     knowledgeIds: ["doc-cop-ticket", "doc-settlement"],
     rules: [
@@ -525,8 +595,27 @@ const shallowAgents: Agent[] = shallowPlacements.map(([id, name, type, work, fun
     { id: "summary", name: "结果摘要", description: "生成业务摘要。", enabled: true },
   ],
   workflow: [
-    { id: "w1", title: "读取输入", description: "解析业务材料或系统事件。", enabled: true },
-    { id: "w2", title: "输出建议", description: "生成可复核处理建议。", enabled: true },
+    {
+      id: "w1", title: "读取输入", description: "解析业务材料或系统事件。", enabled: true,
+      anchor: {
+        strict: false,
+        fields: [
+          { id: "w1f1", key: "input_type", type: "text" as const, required: true, description: "输入材料类型" },
+          { id: "w1f2", key: "has_anomaly", type: "bool" as const, required: true, description: "是否检测到异常" },
+        ],
+      },
+    },
+    {
+      id: "w2", title: "输出建议", description: "生成可复核处理建议。", enabled: true,
+      anchor: {
+        strict: true,
+        fields: [
+          { id: "w2f1", key: "conclusion", type: "enum" as const, options: ["通过", "需关注", "拒绝"], required: true, description: "处理结论" },
+          { id: "w2f2", key: "suggestion", type: "text" as const, required: true, description: "处理建议摘要" },
+          { id: "w2f3", key: "requires_human_review", type: "bool" as const, required: true, description: "是否需要人工复核" },
+        ],
+      },
+    },
   ],
   knowledgeIds: index % 2 === 0 ? ["doc-cashflow-asset"] : ["doc-compliance-check"],
   rules: [
