@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { cellKey, defaultState, functionalFlows, skills as defaultSkills, workFlows } from "./data";
-import type { Agent, AgentStatus, AnchorField, ApiKeyRecord, AppState, EvalRun, FailureCluster, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RubricCriterion, RuleItem, RuleLibraryItem, Skill, ToolAsset, ViewName } from "./types";
+import type { Agent, AgentStatus, AnchorField, ApiKeyRecord, AppState, ConstraintRule, EvalRun, FailureCluster, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RoutingRule, RubricCriterion, RuleItem, RuleLibraryItem, Skill, ToolAsset, ViewName } from "./types";
 
 const STORAGE_KEY = "dgt-agent-platform-demo";
 
@@ -244,7 +244,7 @@ const agentBlueprints: AgentBlueprint[] = [
           fields: [
             { id: "w3f1", key: "violated_rules", type: "list", required: true, description: "命中的规则 ID 和名称列表" },
             { id: "w3f2", key: "risk_level", type: "enum", options: ["低", "中", "高"], required: true, description: "综合规则校验后的风险等级" },
-            { id: "w3f3", key: "requires_human_review", type: "bool", required: true, description: "是否需要进入人工复核队列", constraint: "若 risk_level=高 则必须为 true" },
+            { id: "w3f3", key: "requires_human_review", type: "bool", required: true, description: "是否需要进入人工复核队列", constraintDSL: [{ id: "cr-bp1-1", ifField: "risk_level", ifOp: "eq" as const, ifValue: "高", thenField: "requires_human_review", thenMustBe: true }] },
           ],
         },
       },
@@ -341,7 +341,7 @@ const agentBlueprints: AgentBlueprint[] = [
         anchor: {
           strict: true,
           fields: [
-            { id: "w2f1", key: "priority", type: "enum", options: ["P0", "P1", "P2", "P3"], required: true, description: "工单处理优先级", constraint: "若 blocks_settlement=true 且 affected_stores≥5 则 priority 必须为 P0 或 P1" },
+            { id: "w2f1", key: "priority", type: "enum", options: ["P0", "P1", "P2", "P3"], required: true, description: "工单处理优先级", constraintDSL: [{ id: "cr-bp2-1", ifField: "blocks_settlement", ifOp: "eq" as const, ifValue: true, thenField: "priority", thenMustBe: "P0" }] },
             { id: "w2f2", key: "priority_reason", type: "text", required: true, description: "优先级判断依据说明" },
             { id: "w2f3", key: "requires_immediate_action", type: "bool", required: true, description: "是否需要立即人工介入" },
           ],
@@ -461,7 +461,7 @@ const agentBlueprints: AgentBlueprint[] = [
             { id: "w3f1", key: "gaps", type: "list", required: true, description: "发现的信息缺口列表，每条一句话" },
             { id: "w3f2", key: "risk_level", type: "enum", options: ["低", "中", "高"], required: true, description: "整体合规风险等级" },
             { id: "w3f3", key: "conclusion", type: "enum", options: ["通过", "需关注", "拒绝发行"], required: true, description: "最终复核结论" },
-            { id: "w3f4", key: "reviewer_required", type: "bool", required: true, description: "是否需要合规负责人人工复核", constraint: "若 risk_level=高 或 investor_suitability_present=false 则必须为 true" },
+            { id: "w3f4", key: "reviewer_required", type: "bool", required: true, description: "是否需要合规负责人人工复核", constraintDSL: [{ id: "cr-bp3-1", ifField: "risk_level", ifOp: "eq" as const, ifValue: "高", thenField: "reviewer_required", thenMustBe: true }] },
             { id: "w3f5", key: "suggestions", type: "list", required: true, description: "补充建议列表，每条对应一个缺口" },
           ],
         },
@@ -3969,11 +3969,6 @@ function SkillCard({
                             必填
                           </label>
                           <input value={f.description} placeholder="含义说明" onChange={(e) => updateSkillAnchorField(i, f.id, { description: e.target.value })} />
-                          <input
-                            value={f.constraint ?? ""}
-                            placeholder="跨字段约束（选填）"
-                            onChange={(e) => updateSkillAnchorField(i, f.id, { constraint: e.target.value || undefined })}
-                          />
                           <button className="ghost-button compact danger-button" type="button" onClick={() => removeSkillAnchorField(i, f.id)}>
                             <X size={11} />
                           </button>
@@ -3991,14 +3986,14 @@ function SkillCard({
                         <div className="anchor-field-badges">
                           {step.anchor.fields.map((f) => <AnchorFieldBadge key={f.id} field={f} />)}
                         </div>
-                        {step.anchor.fields.some((f) => f.constraint) && (
+                        {step.anchor.fields.some((f) => (f.constraintDSL ?? []).length > 0) && (
                           <div className="anchor-constraints">
-                            {step.anchor.fields.filter((f) => f.constraint).map((f) => (
-                              <div key={f.id} className="anchor-constraint-row">
+                            {step.anchor.fields.flatMap((f) => (f.constraintDSL ?? []).map((r) => (
+                              <div key={r.id} className="anchor-constraint-row">
                                 <span className="anchor-constraint-key">{f.key}：</span>
-                                <span className="anchor-constraint-val">{f.constraint}</span>
+                                <span className="anchor-constraint-val">如果 {r.ifField} {r.ifOp} {String(r.ifValue)} 则 {r.thenField} 必须为 {String(r.thenMustBe)}</span>
                               </div>
-                            ))}
+                            )))}
                           </div>
                         )}
                       </div>
@@ -4660,7 +4655,7 @@ function AgentDetailPage({
       workflow: item.workflow.map((s) =>
         s.id !== stepId ? s : {
           ...s,
-          routing: [...(s.routing ?? []), { id: `rt-${Date.now()}`, condition: "", nextStepId: "" }],
+          routing: [...(s.routing ?? []), { id: `rt-${Date.now()}`, nextStepId: "" }],
         },
       ),
     }));
@@ -4675,7 +4670,7 @@ function AgentDetailPage({
     }));
   };
 
-  const updateRoutingRule = (stepId: string, ruleId: string, patch: { condition?: string; nextStepId?: string }) => {
+  const updateRoutingRule = (stepId: string, ruleId: string, patch: Partial<RoutingRule>) => {
     onUpdateAgent(agent.id, (item) => ({
       ...item,
       workflow: item.workflow.map((s) =>
@@ -4683,6 +4678,87 @@ function AgentDetailPage({
           ...s,
           routing: (s.routing ?? []).map((r) => r.id === ruleId ? { ...r, ...patch } : r),
         },
+      ),
+    }));
+  };
+
+  const addConstraintRule = (stepId: string, fieldId: string) => {
+    const newRule: ConstraintRule = {
+      id: `cr-${Date.now()}`,
+      ifField: "", ifOp: "eq", ifValue: "",
+      thenField: "", thenMustBe: "",
+    };
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : {
+          ...s,
+          anchor: {
+            ...s.anchor!,
+            fields: s.anchor!.fields.map((f) =>
+              f.id !== fieldId ? f : { ...f, constraintDSL: [...(f.constraintDSL ?? []), newRule] },
+            ),
+          },
+        },
+      ),
+    }));
+  };
+
+  const removeConstraintRule = (stepId: string, fieldId: string, ruleId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : {
+          ...s,
+          anchor: {
+            ...s.anchor!,
+            fields: s.anchor!.fields.map((f) =>
+              f.id !== fieldId ? f : { ...f, constraintDSL: (f.constraintDSL ?? []).filter((r) => r.id !== ruleId) },
+            ),
+          },
+        },
+      ),
+    }));
+  };
+
+  const updateConstraintRule = (stepId: string, fieldId: string, ruleId: string, patch: Partial<ConstraintRule>) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : {
+          ...s,
+          anchor: {
+            ...s.anchor!,
+            fields: s.anchor!.fields.map((f) =>
+              f.id !== fieldId ? f : {
+                ...f,
+                constraintDSL: (f.constraintDSL ?? []).map((r) => r.id === ruleId ? { ...r, ...patch } : r),
+              },
+            ),
+          },
+        },
+      ),
+    }));
+  };
+
+  const addInputField = (stepId: string, key: string) => {
+    if (!key.trim()) return;
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : {
+          ...s,
+          inputFields: [...new Set([...(s.inputFields ?? []), key.trim()])],
+        },
+      ),
+    }));
+  };
+
+  const removeInputField = (stepId: string, key: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      workflow: item.workflow.map((s) =>
+        s.id !== stepId ? s : { ...s, inputFields: (s.inputFields ?? []).filter((k) => k !== key) },
       ),
     }));
   };
@@ -5304,6 +5380,34 @@ function AgentDetailPage({
                     placeholder="描述这一步的业务目的（自由文本，Agent 依此执行）"
                   />
 
+                  {/* Input Fields declaration */}
+                  <div className="step-input-fields">
+                    <div className="step-input-fields-head">
+                      <ArrowRight size={12} />
+                      <span>读取上游字段</span>
+                      <small>声明本步骤从上游锚点读取哪些字段（按字段名匹配）</small>
+                    </div>
+                    <div className="step-input-chips">
+                      {(step.inputFields ?? []).map((key) => (
+                        <span className="input-field-chip" key={key}>
+                          {key}
+                          <button type="button" onClick={() => removeInputField(step.id, key)}><X size={10} /></button>
+                        </span>
+                      ))}
+                      <input
+                        className="input-field-add"
+                        placeholder="字段名 + Enter"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && e.currentTarget.value.trim()) {
+                            addInputField(step.id, e.currentTarget.value.trim());
+                            e.currentTarget.value = "";
+                            e.preventDefault();
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+
                   {isAnchorOpen && (
                     <div className="anchor-editor">
                       <div className="anchor-editor-head">
@@ -5364,18 +5468,42 @@ function AgentDetailPage({
                             placeholder="字段含义说明"
                             onChange={(e) => updateAnchorField(step.id, field.id, { description: e.target.value })}
                           />
-                          <input
-                            className="anchor-field-constraint"
-                            value={field.constraint ?? ""}
-                            placeholder="跨字段约束（选填）"
-                            onChange={(e) => updateAnchorField(step.id, field.id, { constraint: e.target.value || undefined })}
-                          />
                           <button
                             className="ghost-button compact danger-button"
                             type="button"
                             onClick={() => removeAnchorField(step.id, field.id)}
                           >
                             <X size={12} />
+                          </button>
+                          {/* Constraint DSL builder */}
+                          {(field.constraintDSL ?? []).map((rule) => (
+                            <div className="constraint-dsl-row" key={rule.id}>
+                              <span className="constraint-label">如果</span>
+                              <select value={rule.ifField} onChange={(e) => updateConstraintRule(step.id, field.id, rule.id, { ifField: e.target.value })}>
+                                <option value="">字段</option>
+                                {(step.anchor?.fields ?? []).map((f) => <option key={f.key} value={f.key}>{f.key}</option>)}
+                              </select>
+                              <select value={rule.ifOp} onChange={(e) => updateConstraintRule(step.id, field.id, rule.id, { ifOp: e.target.value as ConstraintRule["ifOp"] })}>
+                                <option value="eq">＝</option>
+                                <option value="neq">≠</option>
+                                <option value="gt">＞</option>
+                                <option value="gte">≥</option>
+                                <option value="lt">＜</option>
+                                <option value="lte">≤</option>
+                              </select>
+                              <input className="constraint-value" value={String(rule.ifValue)} placeholder="值" onChange={(e) => updateConstraintRule(step.id, field.id, rule.id, { ifValue: e.target.value })} />
+                              <span className="constraint-label">则</span>
+                              <select value={rule.thenField} onChange={(e) => updateConstraintRule(step.id, field.id, rule.id, { thenField: e.target.value })}>
+                                <option value="">字段</option>
+                                {(step.anchor?.fields ?? []).map((f) => <option key={f.key} value={f.key}>{f.key}</option>)}
+                              </select>
+                              <span className="constraint-label">必须为</span>
+                              <input className="constraint-value" value={String(rule.thenMustBe)} placeholder="值" onChange={(e) => updateConstraintRule(step.id, field.id, rule.id, { thenMustBe: e.target.value })} />
+                              <button className="ghost-button compact danger-button" type="button" onClick={() => removeConstraintRule(step.id, field.id, rule.id)}><X size={11} /></button>
+                            </div>
+                          ))}
+                          <button className="ghost-button compact constraint-add-btn" type="button" onClick={() => addConstraintRule(step.id, field.id)}>
+                            <Plus size={11} /> 添加约束
                           </button>
                         </div>
                       ))}
@@ -5403,12 +5531,30 @@ function AgentDetailPage({
                     ) : (
                       (step.routing ?? []).map((rt) => (
                         <div className="routing-rule-row" key={rt.id}>
-                          <input
-                            className="routing-condition"
-                            value={rt.condition}
-                            placeholder="触发条件（如 risk_level=高）"
-                            onChange={(e) => updateRoutingRule(step.id, rt.id, { condition: e.target.value })}
-                          />
+                          <div className="routing-dsl">
+                            <select
+                              value={rt.conditionDSL?.field ?? ""}
+                              onChange={(e) => updateRoutingRule(step.id, rt.id, { conditionDSL: { ...(rt.conditionDSL ?? { op: "eq", value: "" }), field: e.target.value } })}
+                            >
+                              <option value="">（选择字段）</option>
+                              {(step.anchor?.fields ?? []).map((f) => <option key={f.key} value={f.key}>{f.key}</option>)}
+                            </select>
+                            <select
+                              value={rt.conditionDSL?.op ?? "eq"}
+                              onChange={(e) => updateRoutingRule(step.id, rt.id, { conditionDSL: { ...(rt.conditionDSL ?? { field: "", value: "" }), op: e.target.value as NonNullable<RoutingRule["conditionDSL"]>["op"] } })}
+                            >
+                              <option value="eq">＝</option>
+                              <option value="neq">≠</option>
+                              <option value="gt">＞</option>
+                              <option value="lt">＜</option>
+                            </select>
+                            <input
+                              className="routing-condition-value"
+                              value={String(rt.conditionDSL?.value ?? "")}
+                              placeholder="值"
+                              onChange={(e) => updateRoutingRule(step.id, rt.id, { conditionDSL: { ...(rt.conditionDSL ?? { field: "", op: "eq" }), value: e.target.value } })}
+                            />
+                          </div>
                           <ArrowRight size={13} className="routing-arrow" />
                           <select
                             className="routing-target"
@@ -5623,6 +5769,33 @@ function AgentDetailPage({
             </span>
             <span className={`pill ${agent.trainedOnce ? "published" : "training"}`}>{agent.trainedOnce ? "已有训练版本" : "等待首轮训练"}</span>
           </div>
+
+          {agent.recentLessons && agent.recentLessons.length > 0 && (
+            <div className="lesson-summary-card">
+              <div className="lesson-summary-head">
+                <FileText size={14} />
+                <span>上轮训练摘要</span>
+                <span className="lesson-version">{agent.recentLessons[0].version}</span>
+                <small className="lesson-time">{agent.recentLessons[0].time}</small>
+              </div>
+              {agent.recentLessons[0].fixedIssues.length > 0 && (
+                <div className="lesson-section">
+                  <strong>修复成功</strong>
+                  <ul>{agent.recentLessons[0].fixedIssues.map((issue, i) => <li key={i}>{issue}</li>)}</ul>
+                </div>
+              )}
+              {agent.recentLessons[0].failedAttempts.length > 0 && (
+                <div className="lesson-section lesson-blocked">
+                  <strong>拦截记录</strong>
+                  <ul>{agent.recentLessons[0].failedAttempts.map((a, i) => <li key={i}>{a}</li>)}</ul>
+                </div>
+              )}
+              <div className="lesson-section lesson-focus">
+                <strong>建议聚焦</strong>
+                <p>{agent.recentLessons[0].suggestedFocus}</p>
+              </div>
+            </div>
+          )}
 
           <div className="training-console">
             <div className="training-control-panel">

@@ -299,7 +299,7 @@ const mainAgents: Agent[] = [
           fields: [
             { id: "w3f1", key: "violated_rules", type: "list" as const, required: true, description: "命中规则列表" },
             { id: "w3f2", key: "risk_level", type: "enum" as const, options: ["低", "中", "高"], required: true, description: "综合风险等级" },
-            { id: "w3f3", key: "requires_human_review", type: "bool" as const, required: true, description: "是否需要人工复核", constraint: "若 risk_level=高 则必须为 true" },
+            { id: "w3f3", key: "requires_human_review", type: "bool" as const, required: true, description: "是否需要人工复核", constraintDSL: [{ id: "cr-w3f3-1", ifField: "risk_level", ifOp: "eq" as const, ifValue: "高", thenField: "requires_human_review", thenMustBe: true }] },
           ],
         },
       },
@@ -442,7 +442,7 @@ const mainAgents: Agent[] = [
         anchor: {
           strict: true,
           fields: [
-            { id: "s2f1", key: "priority", type: "enum" as const, options: ["P0", "P1", "P2", "P3"], required: true, description: "工单优先级", constraint: "若 blocks_settlement=true 且 affected_stores≥5 则必须为 P0 或 P1" },
+            { id: "s2f1", key: "priority", type: "enum" as const, options: ["P0", "P1", "P2", "P3"], required: true, description: "工单优先级", constraintDSL: [{ id: "cr-s2f1-1", ifField: "blocks_settlement", ifOp: "eq" as const, ifValue: true, thenField: "priority", thenMustBe: "P0" }] },
             { id: "s2f2", key: "priority_reason", type: "text" as const, required: true, description: "优先级判断依据" },
           ],
         },
@@ -546,6 +546,17 @@ const mainAgents: Agent[] = [
       { id: "rub-s-2", dimension: "优先级判断", weight: 35, guide: "结合结算影响、门店范围、阻塞程度给出正确的 P0-P3 级别" },
       { id: "rub-s-3", dimension: "责任方路由", weight: 20, guide: "正确推荐处理团队，P1 及以上需标注人工确认" },
       { id: "rub-s-4", dimension: "摘要可转派", weight: 10, guide: "摘要应简洁可读，可直接用于工单转派" },
+    ],
+    judgePhase: "parallel" as const,
+    recentLessons: [
+      {
+        runId: "run-s-003",
+        version: "v0.3",
+        fixedIssues: ["批量门店数据同步延迟的优先级判断不稳定（已通过新增 Few-shot 修复）", "责任方路由在跨团队场景下缺失协同标注（已通过规则补全修复）"],
+        failedAttempts: ["尝试修改 temperature 以提升结算影响判断一致性 — 回归守门拦截（holdout 分数下降 3.2 点）"],
+        suggestedFocus: "单门店低频异常场景（如权限问题）覆盖仍不足，建议下一轮补充边界用例并优化 P3 判断路径。",
+        time: "2026-06-21T18:10:00Z",
+      },
     ],
   },
 ];
@@ -675,7 +686,7 @@ export const skills: Skill[] = [
             { id: "f1", key: "conclusion", type: "enum", options: ["通过", "需关注", "拒绝"], required: true, description: "综合判断该条款是否合规" },
             { id: "f2", key: "risk_level", type: "enum", options: ["低", "中", "高"], required: true, description: "识别出的风险等级" },
             { id: "f3", key: "risk_items", type: "list", required: false, description: "发现的风险点，每条一句话" },
-            { id: "f4", key: "requires_human_review", type: "bool", required: true, description: "是否需要人工复核", constraint: "若 risk_level=高 则必须为 true" },
+            { id: "f4", key: "requires_human_review", type: "bool", required: true, description: "是否需要人工复核", constraintDSL: [{ id: "cr-f4-1", ifField: "risk_level", ifOp: "eq" as const, ifValue: "高", thenField: "requires_human_review", thenMustBe: true }] },
           ],
         },
       },

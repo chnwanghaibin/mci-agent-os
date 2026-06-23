@@ -4873,14 +4873,6 @@ textarea:focus {
   gap: 6px;
   margin-top: 6px;
 }
-.routing-condition {
-  flex: 1;
-  font-size: 12px;
-  padding: 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  font-family: inherit;
-}
 .routing-arrow {
   color: var(--muted);
   flex-shrink: 0;
@@ -5118,3 +5110,193 @@ textarea:focus {
   outline: none;
 }
 .schema-tag-input:focus { border-color: #1d4ed8; }
+
+/* ── Constraint DSL builder ────────────────────────────────────────────────── */
+.constraint-dsl-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding: 5px 8px;
+  background: #f5f3ff;
+  border: 1px solid #ede9fe;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.constraint-label {
+  color: #5b21b6;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.constraint-dsl-row select {
+  font-size: 11px;
+  padding: 2px 5px;
+  border: 1px solid #c4b5fd;
+  border-radius: 4px;
+  background: white;
+  color: var(--ink);
+  font-family: inherit;
+}
+.constraint-value {
+  font-size: 11px;
+  padding: 2px 6px;
+  border: 1px solid #c4b5fd;
+  border-radius: 4px;
+  width: 70px;
+  font-family: inherit;
+}
+.constraint-add-btn {
+  margin-top: 5px;
+  font-size: 11px !important;
+  color: #7c3aed !important;
+  border-color: #c4b5fd !important;
+}
+
+/* ── Step inputFields declaration ──────────────────────────────────────────── */
+.step-input-fields {
+  margin-top: 8px;
+  padding: 7px 10px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 5px;
+}
+.step-input-fields-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #166534;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.step-input-fields-head small {
+  font-weight: 400;
+  color: var(--muted);
+}
+.step-input-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.input-field-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  background: #dcfce7;
+  border: 1px solid #86efac;
+  border-radius: 20px;
+  color: #166534;
+}
+.input-field-chip button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+  color: #16a34a;
+  display: flex;
+  align-items: center;
+  opacity: 0.7;
+}
+.input-field-chip button:hover { opacity: 1; }
+.input-field-add {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px dashed #86efac;
+  border-radius: 20px;
+  min-width: 90px;
+  font-family: inherit;
+  background: transparent;
+  outline: none;
+  color: #166534;
+}
+.input-field-add:focus { border-color: #16a34a; border-style: solid; }
+
+/* ── Routing DSL ───────────────────────────────────────────────────────────── */
+.routing-dsl {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+.routing-dsl select {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+}
+.routing-condition-value {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  width: 65px;
+  font-family: inherit;
+}
+
+/* ── Lesson Summary Card ───────────────────────────────────────────────────── */
+.lesson-summary-card {
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.lesson-summary-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  color: #92400e;
+}
+.lesson-summary-head span:first-of-type {
+  font-weight: 700;
+}
+.lesson-version {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  border-radius: 10px;
+  color: #92400e;
+}
+.lesson-time {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: auto;
+}
+.lesson-section {
+  margin-bottom: 8px;
+}
+.lesson-section strong {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #78350f;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.lesson-section ul {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--ink);
+  line-height: 1.6;
+}
+.lesson-section p {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.5;
+}
+.lesson-blocked strong { color: #b91c1c; }
+.lesson-blocked ul { color: #7f1d1d; }
+.lesson-focus { background: #fffbeb; border-radius: 4px; padding: 4px 0; }

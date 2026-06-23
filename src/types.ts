@@ -44,6 +44,15 @@ export interface ToolItem {
   enabled: boolean;
 }
 
+export interface ConstraintRule {
+  id: string;
+  ifField: string;
+  ifOp: "eq" | "neq" | "gt" | "gte" | "lt" | "lte";
+  ifValue: string | boolean | number;
+  thenField: string;
+  thenMustBe: string | boolean | number;
+}
+
 export interface AnchorField {
   id: string;
   key: string;
@@ -51,7 +60,7 @@ export interface AnchorField {
   options?: string[];
   required: boolean;
   description: string;
-  constraint?: string;
+  constraintDSL?: ConstraintRule[];
 }
 
 export interface OutputAnchor {
@@ -61,7 +70,11 @@ export interface OutputAnchor {
 
 export interface RoutingRule {
   id: string;
-  condition: string;
+  conditionDSL?: {
+    field: string;
+    op: "eq" | "neq" | "gt" | "lt";
+    value: string | boolean | number;
+  };
   nextStepId: string;
 }
 
@@ -71,8 +84,18 @@ export interface WorkflowStep {
   description: string;
   enabled: boolean;
   skillRef?: string;
+  inputFields?: string[];
   anchor?: OutputAnchor;
   routing?: RoutingRule[];
+}
+
+export interface TrainingLessonSummary {
+  runId: string;
+  version: string;
+  fixedIssues: string[];
+  failedAttempts: string[];
+  suggestedFocus: string;
+  time: string;
 }
 
 export interface SkillStep {
@@ -255,6 +278,7 @@ export interface Agent {
   retrievalConfig?: RetrievalConfig;
   rubric?: RubricCriterion[];
   judgePhase?: "human" | "parallel" | "auto";
+  recentLessons?: TrainingLessonSummary[];
 }
 
 export interface AppState {
