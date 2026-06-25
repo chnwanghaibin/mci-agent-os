@@ -1,4 +1,4 @@
-import type { Agent, ApiKeyRecord, AppState, EvalRun, FlowItem, KnowledgeDoc, RuleLibraryItem, Skill, ToolAsset } from "./types";
+import type { Agent, ApiKeyRecord, AppState, EvalRun, FlowItem, KnowledgeDoc, RuleLibraryItem, Skill } from "./types";
 
 
 export const functionalFlows: FlowItem[] = [
@@ -27,19 +27,6 @@ export const workFlows: FlowItem[] = [
 
 export const cellKey = (workId: string, functionId: string) => `${workId}:${functionId}`;
 
-const contractTools = [
-  { id: "search", name: "知识检索", description: "检索合同审查标准、现金流资产规则和历史案例。", enabled: true },
-  { id: "rule", name: "规则校验", description: "逐条命中收益分配、披露、合规和登记规则。", enabled: true },
-  { id: "report", name: "报告生成", description: "输出风险等级、修改建议和审查结论。", enabled: true },
-  { id: "handoff", name: "人工复核", description: "高风险条款自动进入人工复核队列。", enabled: true },
-];
-
-const systemTools = [
-  { id: "classify", name: "工单分类", description: "识别 COP、结算、门店数据、账户权限等问题类型。", enabled: true },
-  { id: "route", name: "责任方路由", description: "根据业务域和影响范围推荐处理团队。", enabled: true },
-  { id: "sla", name: "优先级判断", description: "结合现金流影响、门店范围和阻塞程度给出 P 级。", enabled: true },
-  { id: "summary", name: "摘要生成", description: "将原始工单改写为可执行处理摘要。", enabled: true },
-];
 
 const docs: KnowledgeDoc[] = [
   {
@@ -146,62 +133,6 @@ const rules: RuleLibraryItem[] = [
   },
 ];
 
-const tools: ToolAsset[] = [
-  {
-    id: "tool-knowledge-search",
-    name: "统一知识检索",
-    category: "检索",
-    description: "按标签、节点和 Agent 上下文检索合同、现金流、COP、结算和披露标准。",
-    status: "启用",
-    linkedAgentIds: ["contract-review", "system-triage", "pcf-summary", "compliance-watch"],
-    endpoint: "/tools/knowledge-search",
-  },
-  {
-    id: "tool-rule-check",
-    name: "规则校验引擎",
-    category: "规则",
-    description: "执行 Agent 内规则卡片，输出命中规则、优先级、解释和人工复核条件。",
-    status: "启用",
-    linkedAgentIds: ["contract-review", "system-triage", "disclosure-check"],
-    endpoint: "/tools/rule-check",
-  },
-  {
-    id: "tool-report",
-    name: "结构化报告生成",
-    category: "生成",
-    description: "将 Agent 过程结果转成风险报告、分诊报告、披露检查报告或摘要。",
-    status: "启用",
-    linkedAgentIds: ["contract-review", "system-triage", "pcf-summary"],
-    endpoint: "/tools/report-render",
-  },
-  {
-    id: "tool-ticket-route",
-    name: "工单责任方路由",
-    category: "路由",
-    description: "根据工单类型、影响范围和阻塞环节推荐数据平台、结算支持或业务运营团队。",
-    status: "启用",
-    linkedAgentIds: ["system-triage", "qr-cop", "matching-helper"],
-    endpoint: "/tools/ticket-route",
-  },
-  {
-    id: "tool-human-review",
-    name: "人工复核队列",
-    category: "人工复核",
-    description: "汇总高风险输出、低置信度结果和用户低分反馈，形成可追踪复核任务。",
-    status: "启用",
-    linkedAgentIds: ["contract-review", "compliance-watch", "secondary-risk"],
-    endpoint: "/tools/human-review",
-  },
-  {
-    id: "tool-api-gateway",
-    name: "Agent 调用网关",
-    category: "接口",
-    description: "统一管理已发布 Agent 的 mock API、调用记录、鉴权状态和请求示例。",
-    status: "启用",
-    linkedAgentIds: ["contract-review", "system-triage", "settlement-reconcile"],
-    endpoint: "/gateway/agents",
-  },
-];
 
 const evalRuns: EvalRun[] = [
   {
@@ -268,7 +199,6 @@ const mainAgents: Agent[] = [
     prompt:
       "你是滴灌通合同审查 Agent。请围绕门店现金流合约、收益分配、披露义务、提前终止、争议解决和投资者保护条款进行审查。输出必须包含风险等级、命中规则、修改建议和最终结论。遇到高风险或证据不足时，必须建议人工复核。",
     guardrails: ["输出必须为结构化报告", "不得生成未经验证的法律结论", "高风险条款必须建议人工复核"],
-    tools: contractTools,
     workflow: [
       {
         id: "w1", title: "接收合同材料", description: "读取合同文本、业务背景和门店现金流资产说明。", enabled: true,
@@ -424,7 +354,6 @@ const mainAgents: Agent[] = [
     prompt:
       "你是系统工单分诊 Agent。请读取工单描述，判断问题类型、优先级、责任团队和下一步动作。优先考虑现金流数据同步、COP 操作阻塞、结算影响和门店范围。",
     guardrails: ["P0/P1 工单必须提示人工确认", "不得直接承诺修复时间", "责任团队必须来自已配置团队"],
-    tools: systemTools,
     workflow: [
       {
         id: "s1", title: "读取工单", description: "解析问题描述、影响对象、截图说明和业务时间点。", enabled: true,
@@ -601,10 +530,6 @@ const shallowAgents: Agent[] = shallowPlacements.map(([id, name, type, work, fun
   feedbackSaved: status === "published",
   prompt: `你是 ${name}，请按节点业务规则输出可复核结果。`,
   guardrails: ["输出结构化结果", "异常情况提示人工复核"],
-  tools: [
-    { id: "search", name: "知识检索", description: "检索节点相关标准。", enabled: true },
-    { id: "summary", name: "结果摘要", description: "生成业务摘要。", enabled: true },
-  ],
   workflow: [
     {
       id: "w1", title: "读取输入", description: "解析业务材料或系统事件。", enabled: true,
@@ -768,7 +693,6 @@ export const defaultState: AppState = {
   agents: [...mainAgents, ...shallowAgents],
   docs,
   rules,
-  tools,
   evalRuns,
   apiKeys,
   skills,

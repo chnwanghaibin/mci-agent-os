@@ -1,5 +1,5 @@
 export type AgentStatus = "draft" | "trained" | "published";
-export type ViewName = "matrix" | "agents" | "knowledge" | "rules" | "tools" | "evaluation" | "api" | "detail" | "skills";
+export type ViewName = "matrix" | "agents" | "knowledge" | "rules" | "evaluation" | "api" | "detail" | "skills";
 
 export interface FlowItem {
   id: string;
@@ -34,14 +34,6 @@ export interface RuleLibraryItem {
   category: string;
   tags: string[];
   updatedAt: string;
-}
-
-export interface ToolItem {
-  id: string;
-  sourceToolId?: string;
-  name: string;
-  description: string;
-  enabled: boolean;
 }
 
 export interface ConstraintRule {
@@ -98,6 +90,14 @@ export interface TrainingLessonSummary {
   time: string;
 }
 
+export interface ContextDoc {
+  id: string;
+  name: string;
+  status: "indexing" | "ready" | "error";
+  uploadedAt: string;
+  sizeKB?: number;
+}
+
 export interface SkillStep {
   title: string;
   description: string;
@@ -142,16 +142,6 @@ export interface TestCase {
   judgment?: "pass" | "fail" | null;
   judgmentNote?: string;
   split?: "train" | "holdout";
-}
-
-export interface ToolAsset {
-  id: string;
-  name: string;
-  category: "检索" | "规则" | "生成" | "路由" | "人工复核" | "接口";
-  description: string;
-  status: "启用" | "停用";
-  linkedAgentIds: string[];
-  endpoint: string;
 }
 
 export interface EvalRun {
@@ -261,10 +251,10 @@ export interface Agent {
   inputSchema?: string[];
   outputSchema?: string[];
   guardrails: string[];
-  tools: ToolItem[];
   workflow: WorkflowStep[];
   knowledgeIds: string[];
   rules: RuleItem[];
+  contextDocs?: ContextDoc[];
   beforeReport: TrainingReport;
   afterReport: TrainingReport;
   trace: string[];
@@ -285,7 +275,6 @@ export interface AppState {
   agents: Agent[];
   docs: KnowledgeDoc[];
   rules: RuleLibraryItem[];
-  tools: ToolAsset[];
   evalRuns: EvalRun[];
   apiKeys: ApiKeyRecord[];
   skills: Skill[];

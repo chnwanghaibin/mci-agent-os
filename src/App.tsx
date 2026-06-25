@@ -30,12 +30,11 @@ import {
   ThumbsUp,
   Trash2,
   Upload,
-  Wrench,
   X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { cellKey, defaultState, functionalFlows, skills as defaultSkills, workFlows } from "./data";
-import type { Agent, AgentStatus, AnchorField, ApiKeyRecord, AppState, ConstraintRule, EvalRun, FailureCluster, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RoutingRule, RubricCriterion, RuleItem, RuleLibraryItem, Skill, ToolAsset, ViewName } from "./types";
+import type { Agent, AgentStatus, AnchorField, ApiKeyRecord, AppState, ConstraintRule, EvalRun, FailureCluster, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RoutingRule, RubricCriterion, RuleItem, RuleLibraryItem, Skill, ViewName } from "./types";
 
 const STORAGE_KEY = "dgt-agent-platform-demo";
 
@@ -100,7 +99,6 @@ const evaluationStageCatalog = [
     system: "Evaluation Reporter",
   },
 ];
-const toolCategoryOptions: ToolAsset["category"][] = ["检索", "规则", "生成", "路由", "人工复核", "接口"];
 
 type TrainingRunResult = {
   runId: string;
@@ -183,7 +181,6 @@ type AgentBlueprint = {
   ruleIds: string[];
   prompt: string;
   guardrails: string[];
-  tools: Agent["tools"];
   workflow: Agent["workflow"];
   testCases: Agent["testCases"];
   trace: string[];
@@ -207,12 +204,6 @@ const agentBlueprints: AgentBlueprint[] = [
     prompt:
       "你是滴灌通合同审查 Agent。请基于统一知识库、合同规则和业务上下文审查合同，必须输出风险等级、命中规则、修改建议和是否需要人工复核。不得生成未经验证的法律结论。",
     guardrails: ["高风险条款必须触发人工复核", "不得引用未关联知识库", "输出必须包含风险等级和修改建议", "不确定时给出缺失字段清单"],
-    tools: [
-      { id: "search", sourceToolId: "tool-knowledge-search", name: "知识检索", description: "检索合同审查标准、现金流资产规则和披露清单。", enabled: true },
-      { id: "rule", sourceToolId: "tool-rule-check", name: "规则校验", description: "逐条命中收益分配、终止条款、数据授权等规则。", enabled: true },
-      { id: "report", sourceToolId: "tool-report", name: "报告生成", description: "生成风险等级、修改建议和审查结论。", enabled: true },
-      { id: "handoff", sourceToolId: "tool-human-review", name: "人工复核", description: "高风险或低置信度条款进入人工复核队列。", enabled: true },
-    ],
     workflow: [
       {
         id: "w1", title: "解析合同材料", description: "抽取主体、收益口径、终止条款、授权范围和附件版本。", enabled: true,
@@ -317,12 +308,6 @@ const agentBlueprints: AgentBlueprint[] = [
     prompt:
       "你是系统工单分诊 Agent。请根据工单影响范围、业务环节和结算影响输出分类、优先级、责任团队和处理摘要。P0/P1 必须提示人工确认。",
     guardrails: ["不得承诺修复时间", "P0/P1 必须人工确认", "责任团队必须来自已配置范围"],
-    tools: [
-      { id: "classify", sourceToolId: "tool-knowledge-search", name: "工单分类", description: "识别 COP、结算、门店数据、账户权限等问题类型。", enabled: true },
-      { id: "route", sourceToolId: "tool-ticket-route", name: "责任方路由", description: "根据业务域和影响范围推荐处理团队。", enabled: true },
-      { id: "sla", sourceToolId: "tool-rule-check", name: "优先级判断", description: "结合现金流影响、门店范围和阻塞程度给出 P 级。", enabled: true },
-      { id: "summary", sourceToolId: "tool-report", name: "摘要生成", description: "将原始工单改写为可执行处理摘要。", enabled: true },
-    ],
     workflow: [
       {
         id: "w1", title: "读取工单", description: "提取问题类型、影响范围和业务环节。", enabled: true,
@@ -424,11 +409,6 @@ const agentBlueprints: AgentBlueprint[] = [
     prompt:
       "你是披露合规检查 Agent。请检查材料是否覆盖资产口径、历史回款、风险提示、投资者适当性和关键假设，并输出缺口清单与补充建议。",
     guardrails: ["不得替代合规负责人最终判断", "缺少证据必须列为缺口", "涉及投资者适当性必须提示复核"],
-    tools: [
-      { id: "checklist", sourceToolId: "tool-rule-check", name: "清单核对", description: "逐项核对披露与合规检查清单。", enabled: true },
-      { id: "evidence", sourceToolId: "tool-knowledge-search", name: "证据定位", description: "定位材料中的资产口径、历史回款和风险提示证据。", enabled: true },
-      { id: "gap", sourceToolId: "tool-report", name: "缺口生成", description: "生成缺失信息和补充建议。", enabled: true },
-    ],
     workflow: [
       {
         id: "w1", title: "材料分段", description: "识别资产说明、回款记录、风险提示和适当性章节。", enabled: true,
@@ -532,7 +512,6 @@ function migrateState(partial: Partial<AppState>): AppState {
       prompt: cleanDemoText(agent.prompt ?? defaultAgentsById[agent.id]?.prompt ?? ""),
       inputSchema: agent.inputSchema ?? defaultAgentsById[agent.id]?.inputSchema,
       outputSchema: agent.outputSchema ?? defaultAgentsById[agent.id]?.outputSchema,
-      tools: agent.tools ?? defaultAgentsById[agent.id]?.tools ?? [],
       workflow: agent.workflow ?? defaultAgentsById[agent.id]?.workflow ?? [],
       knowledgeIds: agent.knowledgeIds ?? defaultAgentsById[agent.id]?.knowledgeIds ?? [],
       rules: normalizeAgentRules(agent.rules ?? defaultAgentsById[agent.id]?.rules ?? [], mergedRules),
@@ -550,7 +529,6 @@ function migrateState(partial: Partial<AppState>): AppState {
     })),
     docs: partial.docs ?? defaultState.docs,
     rules: mergedRules,
-    tools: partial.tools ?? defaultState.tools,
     evalRuns: partial.evalRuns ?? defaultState.evalRuns,
     apiKeys: partial.apiKeys ?? defaultState.apiKeys,
     skills: partial.skills ?? defaultSkills,
@@ -635,29 +613,26 @@ function getAgentOutputSchema(agent: Agent, blueprint = inferAgentBlueprint(agen
 function buildTrainingRunResult(agent: Agent): TrainingRunResult {
   const blueprint = inferAgentBlueprint(agent.name, agent.type, agent.purpose);
   const enabledRules = agent.rules.filter((rule) => rule.enabled).length;
-  const enabledTools = agent.tools.filter((tool) => tool.enabled).length;
   const passedCases = agent.testCases.filter((testCase) => testCase.status === "通过").length;
   const cases = Math.max(agent.testCases.length, 1);
   const passRate = Math.min(98, Math.round(((passedCases + Math.max(1, enabledRules)) / (cases + Math.max(1, enabledRules))) * 100));
-  const computedScore = Math.round((agent.afterReport.score + passRate + enabledTools * 2) / 2);
+  const computedScore = Math.round((agent.afterReport.score + passRate) / 2);
   const incrementalLift = agent.score < 90 ? 6 : agent.score < 96 ? 3 : agent.score < 99 ? 1 : 0;
   const scoreAfter = Math.min(99, Math.max(agent.afterReport.score, computedScore, agent.score + incrementalLift));
   const versionAfter = nextVersion(agent.version);
   const knowledgeCoverage = Math.min(100, Math.round((agent.knowledgeIds.length / Math.max(blueprint.knowledgeIds.length, 1)) * 100));
   const ruleCoverage = Math.min(100, Math.round((enabledRules / Math.max(blueprint.ruleIds.length, 1)) * 100));
-  const toolCoverage = Math.min(100, Math.round((enabledTools / Math.max(agent.tools.length, 1)) * 100));
-  const confidence = Math.min(99, Math.round((scoreAfter + passRate + knowledgeCoverage + ruleCoverage + toolCoverage) / 5));
+  const confidence = Math.min(99, Math.round((scoreAfter + passRate + knowledgeCoverage + ruleCoverage) / 4));
   const delta = scoreAfter - agent.score;
   const failed = Math.max(0, cases - Math.max(passedCases + 1, scoreAfter >= 90 ? cases : passedCases));
-  const toolsVerified = Math.max(enabledTools, agent.tools.length ? enabledTools : 1);
+  const toolsVerified = 0;
   const primaryRule = agent.rules.find((rule) => rule.enabled)?.title ?? "关键业务规则";
   const primaryDoc = agent.knowledgeIds.length ? `${agent.knowledgeIds.length} 份关联知识` : "待补充知识库";
 
   const changes = [
     `Prompt 对齐：强化“${blueprint.scenario}”场景下的输入解析、输出字段和人工复核边界。`,
     `知识检索：校准 ${primaryDoc} 的召回顺序，优先引用与 ${agent.type} 直接相关的标准片段。`,
-    `规则边界：验证 ${enabledRules} 条启用规则，重点加固“${primaryRule}”的触发解释。`,
-    `工具链路：完成 ${toolsVerified}/${Math.max(agent.tools.length, 1)} 个工具的 Dry-run，确认结构化报告链路可执行。`,
+    `规则边界：验证 ${enabledRules} 条启用规则，重点加固”${primaryRule}”的触发解释。`,
     `评测回归：运行 ${cases} 个用例，通过率 ${passRate}%，输出质量分从 ${agent.score} 提升至 ${scoreAfter}。`,
   ];
 
@@ -728,12 +703,10 @@ function buildEvaluationRunResult(agent: Agent): EvaluationRunResult {
   const passed = Math.max(0, cases - failed);
   const passRate = Math.round((passed / cases) * 100);
   const enabledRules = agent.rules.filter((rule) => rule.enabled).length;
-  const enabledTools = agent.tools.filter((tool) => tool.enabled).length;
   const knowledgeCoverage = Math.min(100, Math.round((agent.knowledgeIds.length / Math.max(blueprint.knowledgeIds.length, 1)) * 100));
   const ruleCoverage = Math.min(100, Math.round((enabledRules / Math.max(blueprint.ruleIds.length, 1)) * 100));
-  const toolCoverage = Math.min(100, Math.round((enabledTools / Math.max(agent.tools.length, 1)) * 100));
   const structureScore = Math.min(99, Math.round((agent.score + passRate + (agent.prompt.length > 180 ? 95 : 78)) / 3));
-  const evidenceScore = Math.min(99, Math.round((knowledgeCoverage + ruleCoverage + toolCoverage) / 3));
+  const evidenceScore = Math.min(99, Math.round((knowledgeCoverage + ruleCoverage) / 2));
   const stabilityScore = Math.min(99, Math.round((passRate + agent.score + (agent.trainedOnce ? 94 : 72)) / 3));
   const score = Math.min(99, Math.max(60, Math.round((structureScore + evidenceScore + stabilityScore + agent.score) / 4)));
   const gate: EvaluationRunResult["gate"] = failed === 0 && score >= 88 ? "通过" : "需优化";
@@ -746,7 +719,7 @@ function buildEvaluationRunResult(agent: Agent): EvaluationRunResult {
   const findings = [
     `测试用例：共运行 ${cases} 个样例，通过 ${passed} 个，失败/需优化 ${failed} 个，通过率 ${passRate}%。`,
     `结构契约：输出字段、结论格式和人工复核提示评分 ${structureScore}。`,
-    `证据链路：知识覆盖 ${knowledgeCoverage}%，规则覆盖 ${ruleCoverage}%，工具可用 ${toolCoverage}%。`,
+    `证据链路：知识覆盖 ${knowledgeCoverage}%，规则覆盖 ${ruleCoverage}%。`,
     firstFailedCase ? `重点关注：${firstFailedCase.name} 仍处于“${firstFailedCase.status}”，建议补充反例或规则解释。` : "当前用例库未发现阻塞项，可固化为回归基线。",
   ];
 
@@ -785,7 +758,7 @@ function buildEvaluationRunResult(agent: Agent): EvaluationRunResult {
       },
       {
         title: evaluationStageCatalog[2].title,
-        detail: `核验 ${agent.knowledgeIds.length} 份知识、${enabledRules} 条规则和 ${enabledTools} 个工具的可追溯证据。`,
+        detail: `核验 ${agent.knowledgeIds.length} 份知识、${enabledRules} 条规则的可追溯证据。`,
         metric: `${evidenceScore} evidence`,
         status: evidenceScore >= 88 ? "完成" : "需关注",
       },
@@ -954,7 +927,6 @@ function makeNewAgent(name: string, purpose: string, type: string, inputSchema?:
     inputSchema: inputSchema?.length ? inputSchema : [...blueprint.inputSchema],
     outputSchema: outputSchema?.length ? outputSchema : [...blueprint.outputSchema],
     guardrails: [...blueprint.guardrails],
-    tools: blueprint.tools.map((tool) => ({ ...tool, id: `${tool.id}-${Date.now()}` })),
     workflow: blueprint.workflow.map((step) => ({ ...step, id: `${step.id}-${Date.now()}` })),
     knowledgeIds: [...blueprint.knowledgeIds],
     rules: rulesFromBlueprint(blueprint.ruleIds),
@@ -1537,36 +1509,6 @@ export default function App() {
     notify("规则已从当前 Agent 移除");
   };
 
-  const attachToolToAgent = (agentId: string, toolAssetId: string) => {
-    const asset = state.tools.find((t) => t.id === toolAssetId);
-    if (!asset) return;
-    updateAgent(agentId, (agent) => {
-      if (agent.tools.some((t) => t.sourceToolId === toolAssetId)) return agent;
-      return {
-        ...agent,
-        tools: [
-          ...agent.tools,
-          {
-            id: `tool-${Date.now()}`,
-            sourceToolId: asset.id,
-            name: asset.name,
-            description: asset.description,
-            enabled: asset.status === "启用",
-          },
-        ],
-      };
-    });
-    notify("工具已从工具库关联至当前 Agent");
-  };
-
-  const detachToolFromAgent = (agentId: string, toolItemId: string) => {
-    updateAgent(agentId, (agent) => ({
-      ...agent,
-      tools: agent.tools.filter((t) => t.id !== toolItemId),
-    }));
-    notify("工具已从当前 Agent 移除");
-  };
-
   const duplicateAgent = (agentId: string) => {
     const source = agentsById[agentId];
     if (!source) return;
@@ -1598,7 +1540,7 @@ export default function App() {
     const target = agentsById[agentId];
     if (!target) return;
     if (target.status === "published") {
-      const confirmed = window.confirm(`确认删除已发布的 ${target.name}？删除后会解除矩阵节点、暂停接口调用，并清理知识库、工具库和评估记录中的关联。`);
+      const confirmed = window.confirm(`确认删除已发布的 ${target.name}？删除后会解除矩阵节点、暂停接口调用，并清理知识库和评估记录中的关联。`);
       if (!confirmed) return;
     }
 
@@ -1610,10 +1552,6 @@ export default function App() {
         docs: current.docs.map((doc) => ({
           ...doc,
           linkedAgents: doc.linkedAgents.filter((id) => id !== agentId),
-        })),
-        tools: current.tools.map((tool) => ({
-          ...tool,
-          linkedAgentIds: tool.linkedAgentIds.filter((id) => id !== agentId),
         })),
         evalRuns: current.evalRuns.filter((run) => run.agentId !== agentId),
       };
@@ -1758,48 +1696,6 @@ export default function App() {
     notify("模拟请求已发送");
   };
 
-  const toggleTool = (toolId: string) => {
-    setState((current) => ({
-      ...current,
-      tools: current.tools.map((tool) => (tool.id === toolId ? { ...tool, status: tool.status === "启用" ? "停用" : "启用" } : tool)),
-    }));
-    notify("工具状态已更新");
-  };
-
-  const createTool = () => {
-    setState((current) => ({
-      ...current,
-      tools: [
-        {
-          id: `tool-${Date.now()}`,
-          name: "新增工具",
-          category: "生成",
-          description: "填写工具用途、输入输出和适用 Agent。",
-          status: "启用",
-          linkedAgentIds: [],
-          endpoint: "/tools/new-tool",
-        },
-        ...current.tools,
-      ],
-    }));
-    notify("工具已新增");
-  };
-
-  const updateTool = (toolId: string, patch: Partial<ToolAsset>) => {
-    setState((current) => ({
-      ...current,
-      tools: current.tools.map((tool) => (tool.id === toolId ? { ...tool, ...patch } : tool)),
-    }));
-  };
-
-  const deleteTool = (toolId: string) => {
-    setState((current) => ({
-      ...current,
-      tools: current.tools.filter((tool) => tool.id !== toolId),
-    }));
-    notify("工具已删除");
-  };
-
   const toggleApiKey = (keyId: string) => {
     setState((current) => ({
       ...current,
@@ -1867,7 +1763,6 @@ export default function App() {
           <NavButton icon={<Bot />} label="Agent 管理" active={view === "agents" || view === "detail"} onClick={() => setView("agents")} />
           <NavButton icon={<Database />} label="知识库" active={view === "knowledge"} onClick={() => setView("knowledge")} />
           <NavButton icon={<Settings2 />} label="规则库" active={view === "rules"} onClick={() => setView("rules")} />
-          <NavButton icon={<Wrench />} label="工具库" active={view === "tools"} onClick={() => setView("tools")} />
           <NavButton icon={<Layers3 />} label="Skill 库" active={view === "skills"} onClick={() => setView("skills")} />
           <NavButton icon={<CheckCircle2 />} label="评估追踪" active={view === "evaluation"} onClick={() => setView("evaluation")} />
           <NavButton icon={<Code2 />} label="接口中心" active={view === "api"} onClick={() => setView("api")} />
@@ -1886,7 +1781,6 @@ export default function App() {
         {view === "matrix" && (
           <MatrixPage
             agents={state.agents}
-            tools={state.tools}
             apiKeys={state.apiKeys}
             highlightedCell={highlightedCell}
             selectedCellKey={selectedCellKey}
@@ -1930,18 +1824,6 @@ export default function App() {
             onUpdateRule={updateRuleEverywhere}
             onCreateRule={() => createRuleForAgent()}
             onDeleteRule={deleteRuleEverywhere}
-            onOpenAgent={openAgent}
-          />
-        )}
-
-        {view === "tools" && (
-          <ToolsPage
-            tools={state.tools}
-            agents={state.agents}
-            onToggleTool={toggleTool}
-            onCreateTool={createTool}
-            onUpdateTool={updateTool}
-            onDeleteTool={deleteTool}
             onOpenAgent={openAgent}
           />
         )}
@@ -2020,9 +1902,6 @@ export default function App() {
             onCreateRule={createRuleForAgent}
             onUpdateAgentRule={updateAgentRule}
             onDetachRule={detachRuleFromAgent}
-            toolLibrary={state.tools}
-            onAttachTool={attachToolToAgent}
-            onDetachTool={detachToolFromAgent}
             onPromoteRule={promoteRuleToLibrary}
             skills={state.skills}
           />
@@ -2787,7 +2666,6 @@ function getCellState(agent?: Agent) {
 
 function MatrixPage({
   agents,
-  tools,
   apiKeys,
   highlightedCell,
   selectedCellKey,
@@ -2797,7 +2675,6 @@ function MatrixPage({
   onPlaceAgent,
 }: {
   agents: Agent[];
-  tools: ToolAsset[];
   apiKeys: ApiKeyRecord[];
   highlightedCell: string | null;
   selectedCellKey: string | null;
@@ -2829,10 +2706,9 @@ function MatrixPage({
       training: placed.filter((agent) => agent.status !== "published").length,
       planned: 80 - placed.length,
       avgScore,
-      enabledTools: tools.filter((tool) => tool.status === "启用").length,
       activeApiKeys: apiKeys.filter((key) => key.status === "启用").length,
     };
-  }, [agents, apiKeys, tools]);
+  }, [agents, apiKeys]);
 
   const selectedAgent = selectedCellKey ? agentByCell[selectedCellKey] : undefined;
 
@@ -2858,7 +2734,6 @@ function MatrixPage({
           <Metric icon={<Grid3X3 />} label="已落位节点" value={`${counts.placed}/${counts.total}`} />
           <Metric icon={<Rocket />} label="已发布 Agent" value={counts.publishedAgents.toString()} tone="green" />
           <Metric icon={<Star />} label="平均质量分" value={counts.avgScore.toString()} tone={counts.avgScore >= 86 ? "green" : "amber"} />
-          <Metric icon={<Wrench />} label="启用工具" value={counts.enabledTools.toString()} />
           <Metric icon={<Code2 />} label="接口密钥" value={counts.activeApiKeys.toString()} />
         </div>
 
@@ -3279,10 +3154,6 @@ function CreateAgentPanel({
               <strong>{suggestedBlueprint.ruleIds.length}</strong>
             </div>
             <div>
-              <span>工具能力</span>
-              <strong>{suggestedBlueprint.tools.length}</strong>
-            </div>
-            <div>
               <span>评测样例</span>
               <strong>{suggestedBlueprint.testCases.length}</strong>
             </div>
@@ -3617,139 +3488,6 @@ function RulesPage({
             </div>
           );
         })}
-      </div>
-    </section>
-  );
-}
-
-function ToolsPage({
-  tools,
-  agents,
-  onToggleTool,
-  onCreateTool,
-  onUpdateTool,
-  onDeleteTool,
-  onOpenAgent,
-}: {
-  tools: ToolAsset[];
-  agents: Agent[];
-  onToggleTool: (toolId: string) => void;
-  onCreateTool: () => void;
-  onUpdateTool: (toolId: string, patch: Partial<ToolAsset>) => void;
-  onDeleteTool: (toolId: string) => void;
-  onOpenAgent: (agentId: string) => void;
-}) {
-  const [category, setCategory] = useState("all");
-  const [query, setQuery] = useState("");
-  const categories = Array.from(new Set(tools.map((tool) => tool.category)));
-  const visibleTools = tools.filter((tool) => {
-    const hitCategory = category === "all" || tool.category === category;
-    const hitQuery = `${tool.name}${tool.description}${tool.category}`.toLowerCase().includes(query.toLowerCase());
-    return hitCategory && hitQuery;
-  });
-
-  return (
-    <section className="page">
-      <div className="page-sticky-zone">
-        <PageHeader
-          eyebrow="Tool Registry"
-          title="工具库"
-          description="把检索、规则、生成、路由、人工复核和接口网关沉淀成可复用工具，供不同 Agent 编排使用。"
-          actions={
-            <button className="primary-button" type="button" onClick={onCreateTool}>
-              <Plus size={16} />
-              新增工具
-            </button>
-          }
-        />
-
-        <div className="filter-bar">
-          <label className="search-box">
-            <Search size={16} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索工具名称、能力说明" />
-          </label>
-          <label className="select-box">
-            <Wrench size={16} />
-            <select value={category} onChange={(event) => setCategory(event.target.value)}>
-              <option value="all">全部工具</option>
-              {categories.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </div>
-
-      <div className="tool-registry-grid">
-        {visibleTools.map((tool) => (
-          <div className="tool-asset-card" key={tool.id}>
-            <div className="tool-asset-head">
-              <span className={`pill ${tool.status === "启用" ? "published" : "planned"}`}>{tool.status}</span>
-              <div className="inline-actions">
-                <button className="ghost-button compact" type="button" onClick={() => onToggleTool(tool.id)}>
-                  {tool.status === "启用" ? "停用" : "启用"}
-                </button>
-                <button className="ghost-button compact danger-button" type="button" onClick={() => onDeleteTool(tool.id)}>
-                  删除
-                </button>
-              </div>
-            </div>
-            <div className="tool-edit-form">
-              <label>
-                <span>工具名称</span>
-                <input value={tool.name} onChange={(event) => onUpdateTool(tool.id, { name: event.target.value })} />
-              </label>
-              <label>
-                <span>分类</span>
-                <select value={tool.category} onChange={(event) => onUpdateTool(tool.id, { category: event.target.value as ToolAsset["category"] })}>
-                  {toolCategoryOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="wide">
-                <span>能力说明</span>
-                <textarea value={tool.description} onChange={(event) => onUpdateTool(tool.id, { description: event.target.value })} rows={3} />
-              </label>
-              <label className="wide">
-                <span>Endpoint</span>
-                <input value={tool.endpoint} onChange={(event) => onUpdateTool(tool.id, { endpoint: event.target.value })} />
-              </label>
-            </div>
-            <div className="tag-row compact-tags">
-              <span className="tag">{tool.category}</span>
-              <span className="tag">{tool.linkedAgentIds.length} 个 Agent</span>
-            </div>
-            <div className="tool-agent-links">
-              {agents.slice(0, 6).map((agent) => {
-                const linked = tool.linkedAgentIds.includes(agent.id);
-                return (
-                  <div className="mini-check-row" key={agent.id}>
-                    <label className="link-check-body">
-                      <input
-                        type="checkbox"
-                        checked={linked}
-                        onChange={() =>
-                          onUpdateTool(tool.id, {
-                            linkedAgentIds: linked ? tool.linkedAgentIds.filter((id) => id !== agent.id) : [...tool.linkedAgentIds, agent.id],
-                          })
-                        }
-                      />
-                      <span>{agent.name}</span>
-                    </label>
-                    <button className="ghost-button compact" type="button" onClick={() => onOpenAgent(agent.id)}>
-                      详情
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
       </div>
     </section>
   );
@@ -4512,9 +4250,6 @@ function AgentDetailPage({
   onCreateRule,
   onUpdateAgentRule,
   onDetachRule,
-  toolLibrary,
-  onAttachTool,
-  onDetachTool,
   onPromoteRule,
   skills,
 }: {
@@ -4538,9 +4273,6 @@ function AgentDetailPage({
   onCreateRule: (agentId?: string) => void;
   onUpdateAgentRule: (agentId: string, localRuleId: string, patch: Partial<RuleItem>) => void;
   onDetachRule: (agentId: string, localRuleId: string) => void;
-  toolLibrary: ToolAsset[];
-  onAttachTool: (agentId: string, toolAssetId: string) => void;
-  onDetachTool: (agentId: string, toolItemId: string) => void;
   onPromoteRule: (agentId: string, localRuleId: string) => void;
   skills: Skill[];
 }) {
@@ -4549,7 +4281,7 @@ function AgentDetailPage({
   const [publishWork, setPublishWork] = useState(agent.matrixCellKey?.split(":")[0] ?? "contractual");
   const [publishFunc, setPublishFunc] = useState(agent.matrixCellKey?.split(":")[1] ?? "contract-registrar");
   const [ruleToAttach, setRuleToAttach] = useState(ruleLibrary[0]?.id ?? "");
-  const [toolToAttach, setToolToAttach] = useState(toolLibrary[0]?.id ?? "");
+  const [contextDocInput, setContextDocInput] = useState("");
   const [activeDetailSection, setActiveDetailSection] = useState("detail-overview");
   const [detailSlideDirection, setDetailSlideDirection] = useState<"forward" | "backward">("forward");
   const isTraining = trainingAgentId === agent.id;
@@ -4562,7 +4294,6 @@ function AgentDetailPage({
   }, [agent.id, agent.feedbackNote, agent.feedbackScore, agent.matrixCellKey]);
 
   const linkedDocs = docs.filter((doc) => agent.knowledgeIds.includes(doc.id));
-  const enabledTools = agent.tools.filter((tool) => tool.enabled).length;
   const enabledRules = agent.rules.filter((rule) => rule.enabled).length;
   const passedCases = agent.testCases.filter((testCase) => testCase.status === "通过").length;
   const agentBlueprint = inferAgentBlueprint(agent.name, agent.type, agent.purpose);
@@ -4571,26 +4302,23 @@ function AgentDetailPage({
   const knowledgeReadiness = Math.min(100, Math.round((agent.knowledgeIds.length / Math.max(agentBlueprint.knowledgeIds.length, 1)) * 100));
   const ruleReadiness = Math.min(100, Math.round((enabledRules / Math.max(agentBlueprint.ruleIds.length, 1)) * 100));
   const evalReadiness = Math.min(100, Math.round(((passedCases + (agent.trainedOnce ? 1 : 0)) / Math.max(agent.testCases.length, 1)) * 100));
-  const toolReadiness = Math.min(100, Math.round((enabledTools / Math.max(agent.tools.length, 1)) * 100));
-  const readinessScore = Math.round((knowledgeReadiness + ruleReadiness + evalReadiness + toolReadiness + Math.min(agent.score, 100)) / 5);
+  const readinessScore = Math.round((knowledgeReadiness + ruleReadiness + evalReadiness + Math.min(agent.score, 100)) / 4);
   const productionChecks = [
     { label: "知识覆盖", value: knowledgeReadiness, detail: `${agent.knowledgeIds.length} 份文档` },
     { label: "规则覆盖", value: ruleReadiness, detail: `${enabledRules} 条启用` },
-    { label: "工具可用", value: toolReadiness, detail: `${enabledTools}/${agent.tools.length} 个工具` },
     { label: "评测通过", value: evalReadiness, detail: `${passedCases}/${agent.testCases.length} 个样例` },
   ];
   const readinessGaps = productionChecks.filter((check) => check.value < 100);
   const executionStages = [
     { label: "输入契约", value: inputSchema.join(" / ") },
     { label: "规划器", value: `${agent.workflow.filter((step) => step.enabled).length} 个步骤` },
-    { label: "工具调用", value: `${enabledTools} 个启用工具` },
     { label: "边界校验", value: `${agent.guardrails.length} 条安全边界` },
     { label: "结构化输出", value: outputSchema.join(" / ") },
   ];
   const detailSections = [
     { id: "detail-overview", label: "概览", summary: `${readinessScore} 分预检` },
     { id: "detail-prompt", label: "白盒配置单元", summary: `${agent.instructionSegments?.length ?? 0} 段 / ${agent.fewShots?.length ?? 0} 示范` },
-    { id: "detail-tools", label: "工具与边界", summary: `${enabledTools} 工具 / ${agent.guardrails.length} 边界` },
+    { id: "detail-guardrails", label: "安全边界", summary: `${agent.guardrails.length} 条边界` },
     { id: "detail-workflow", label: "工作流管理", summary: `${agent.workflow.filter((step) => step.enabled).length} 个步骤` },
     { id: "detail-assets", label: "知识与规则", summary: `${agent.knowledgeIds.length} 文档 / ${enabledRules} 规则` },
     { id: "detail-training", label: "训练评估", summary: `${passedCases}/${agent.testCases.length} 用例` },
@@ -4760,6 +4488,36 @@ function AgentDetailPage({
       workflow: item.workflow.map((s) =>
         s.id !== stepId ? s : { ...s, inputFields: (s.inputFields ?? []).filter((k) => k !== key) },
       ),
+    }));
+  };
+
+  const addContextDoc = (name: string) => {
+    if (!name.trim()) return;
+    const newDoc: import("./types").ContextDoc = {
+      id: `doc-${Date.now()}`,
+      name: name.trim(),
+      status: "indexing",
+      uploadedAt: new Date().toLocaleString("zh-CN"),
+    };
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      contextDocs: [...(item.contextDocs ?? []), newDoc],
+    }));
+    // simulate indexing completing after 1.5s
+    setTimeout(() => {
+      onUpdateAgent(agent.id, (item) => ({
+        ...item,
+        contextDocs: (item.contextDocs ?? []).map((d) =>
+          d.id === newDoc.id ? { ...d, status: "ready" as const } : d,
+        ),
+      }));
+    }, 1500);
+  };
+
+  const removeContextDoc = (docId: string) => {
+    onUpdateAgent(agent.id, (item) => ({
+      ...item,
+      contextDocs: (item.contextDocs ?? []).filter((d) => d.id !== docId),
     }));
   };
 
@@ -5201,64 +4959,15 @@ function AgentDetailPage({
           )}
         </section>
 
-        <div className={paneClass("detail-tools", "detail-block-heading span-2")}>
+        <div className={paneClass("detail-guardrails", "detail-block-heading span-2")}>
           <span>03</span>
           <div>
-            <strong>工具与边界</strong>
-            <p>配置 Agent 可调用的工具能力，并明确安全边界、人工复核和禁止事项。</p>
+            <strong>安全边界</strong>
+            <p>明确 Agent 的安全边界、人工复核触发条件和禁止事项。</p>
           </div>
         </div>
 
-        <section className={paneClass("detail-tools", "panel")}>
-          <div className="section-title">
-            <Wrench size={16} />
-            工具能力
-          </div>
-          <div className="rule-picker">
-            <select value={toolToAttach} onChange={(event) => setToolToAttach(event.target.value)}>
-              {toolLibrary.map((tool) => (
-                <option key={tool.id} value={tool.id}>
-                  {tool.category} / {tool.name}
-                </option>
-              ))}
-            </select>
-            <button
-              className="secondary-button compact"
-              type="button"
-              onClick={() => onAttachTool(agent.id, toolToAttach)}
-              disabled={!toolToAttach}
-            >
-              关联工具
-            </button>
-          </div>
-          <div className="agent-tool-list">
-            {agent.tools.map((tool) => (
-              <div className="agent-tool-card" key={tool.id}>
-                <label className="tool-enabled">
-                  <input
-                    type="checkbox"
-                    checked={tool.enabled}
-                    onChange={() =>
-                      onUpdateAgent(agent.id, (item) => ({
-                        ...item,
-                        tools: item.tools.map((target) => (target.id === tool.id ? { ...target, enabled: !target.enabled } : target)),
-                      }))
-                    }
-                  />
-                  <span>{tool.enabled ? "启用" : "停用"}</span>
-                </label>
-                <strong className="tool-name">{tool.name}</strong>
-                <p className="tool-desc">{tool.description}</p>
-                <button className="ghost-button compact danger-button" type="button" onClick={() => onDetachTool(agent.id, tool.id)}>
-                  移除
-                </button>
-                <small className="rule-source">来源：{tool.sourceToolId ? "统一工具库" : "历史关联"}</small>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className={paneClass("detail-tools", "panel")}>
+        <section className={paneClass("detail-guardrails", "panel")}>
           <div className="section-title with-action">
             <span>
               <ShieldCheck size={16} />
@@ -5768,6 +5477,57 @@ function AgentDetailPage({
               训练运行控制台
             </span>
             <span className={`pill ${agent.trainedOnce ? "published" : "training"}`}>{agent.trainedOnce ? "已有训练版本" : "等待首轮训练"}</span>
+          </div>
+
+          {/* Context Document Index */}
+          <div className="context-docs-section">
+            <div className="section-title with-action">
+              <span>
+                <FileText size={16} />
+                上下文文档索引
+              </span>
+              <span className="context-docs-hint">每次 Agent 调用前自动读取</span>
+            </div>
+            <p className="context-docs-desc">上传本 Agent 专属文档，执行引擎在每次调用时优先检索这些文档，补充知识库未覆盖的专项内容。</p>
+            <div className="context-doc-list">
+              {(agent.contextDocs ?? []).map((doc) => (
+                <div className="context-doc-row" key={doc.id}>
+                  <span className={`context-doc-status status-${doc.status}`}>
+                    {doc.status === "indexing" ? "索引中…" : doc.status === "ready" ? "已就绪" : "错误"}
+                  </span>
+                  <span className="context-doc-name">{doc.name}</span>
+                  <small className="context-doc-time">{doc.uploadedAt}</small>
+                  <button className="ghost-button compact danger-button" type="button" onClick={() => removeContextDoc(doc.id)}>
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+              {(agent.contextDocs ?? []).length === 0 && (
+                <p className="context-docs-empty">暂无专属文档。添加后每次调用自动检索。</p>
+              )}
+            </div>
+            <div className="context-doc-add-row">
+              <input
+                className="context-doc-input"
+                value={contextDocInput}
+                onChange={(e) => setContextDocInput(e.target.value)}
+                placeholder="文档名称（如：合同审查补充规范 v2.pdf）"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && contextDocInput.trim()) {
+                    addContextDoc(contextDocInput);
+                    setContextDocInput("");
+                  }
+                }}
+              />
+              <button
+                className="secondary-button compact"
+                type="button"
+                onClick={() => { if (contextDocInput.trim()) { addContextDoc(contextDocInput); setContextDocInput(""); } }}
+              >
+                <Plus size={14} />
+                上传文档
+              </button>
+            </div>
           </div>
 
           {agent.recentLessons && agent.recentLessons.length > 0 && (
