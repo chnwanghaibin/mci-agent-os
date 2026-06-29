@@ -3,8 +3,12 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  BarChart2,
+  BookOpen,
   Bot,
   CheckCircle2,
+  CheckSquare,
+  ChevronDown,
   Code2,
   Copy,
   Database,
@@ -12,8 +16,11 @@ import {
   FileText,
   Filter,
   GitCompare,
+  Clock,
   Grid3X3,
+  LayoutGrid,
   Layers3,
+  Zap,
   PlayCircle,
   Plus,
   PowerOff,
@@ -29,12 +36,13 @@ import {
   ThumbsDown,
   ThumbsUp,
   Trash2,
+  TrendingUp,
   Upload,
   X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { cellKey, defaultState, functionalFlows, skills as defaultSkills, workFlows } from "./data";
-import type { Agent, AgentStatus, AnchorField, ApiKeyRecord, AppState, ConstraintRule, EvalRun, FailureCluster, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RoutingRule, RubricCriterion, RuleItem, RuleLibraryItem, Skill, ViewName } from "./types";
+import type { Agent, AgentStatus, AnchorField, ApiKeyRecord, AppState, ConstraintRule, EvalRun, FailureCluster, FewShotExample, InstructionSegment, KnowledgeDoc, Proposal, ProposalStatus, RoutingRule, RubricCriterion, RuleItem, RuleLibraryItem, Skill, TestCase, ViewName } from "./types";
 
 const STORAGE_KEY = "dgt-agent-platform-demo";
 
@@ -997,11 +1005,6 @@ export default function App() {
   const findAgentByCell = (key: string) => state.agents.find((agent) => agent.matrixCellKey === key);
 
   const openCell = (key: string) => {
-    const agent = findAgentByCell(key);
-    if (agent && !agent.shallow) {
-      openAgent(agent.id);
-      return;
-    }
     setSelectedCellKey(key);
   };
 
@@ -1759,13 +1762,14 @@ export default function App() {
         </div>
 
         <nav className="nav-stack" aria-label="主导航">
-          <NavButton icon={<Grid3X3 />} label="矩阵看板" active={view === "matrix"} onClick={() => setView("matrix")} />
-          <NavButton icon={<Bot />} label="Agent 管理" active={view === "agents" || view === "detail"} onClick={() => setView("agents")} />
-          <NavButton icon={<Database />} label="知识库" active={view === "knowledge"} onClick={() => setView("knowledge")} />
-          <NavButton icon={<Settings2 />} label="规则库" active={view === "rules"} onClick={() => setView("rules")} />
-          <NavButton icon={<Layers3 />} label="Skill 库" active={view === "skills"} onClick={() => setView("skills")} />
-          <NavButton icon={<CheckCircle2 />} label="评估追踪" active={view === "evaluation"} onClick={() => setView("evaluation")} />
-          <NavButton icon={<Code2 />} label="接口中心" active={view === "api"} onClick={() => setView("api")} />
+          <NavButton icon={<Grid3X3 />} label="矩阵看板A" active={view === "matrix"} onClick={() => setView("matrix")} />
+          <NavButton icon={<LayoutGrid />} label="矩阵看板B" active={view === "matrix-b"} onClick={() => { setSelectedCellKey(null); setView("matrix-b"); }} />
+          <NavButton icon={<Bot />} label="Agent 管理" active={view === "agents" || view === "detail"} onClick={() => { setSelectedCellKey(null); setView("agents"); }} />
+          <NavButton icon={<Database />} label="知识库" active={view === "knowledge"} onClick={() => { setSelectedCellKey(null); setView("knowledge"); }} />
+          <NavButton icon={<Settings2 />} label="规则库" active={view === "rules"} onClick={() => { setSelectedCellKey(null); setView("rules"); }} />
+          <NavButton icon={<Layers3 />} label="Skill 库" active={view === "skills"} onClick={() => { setSelectedCellKey(null); setView("skills"); }} />
+          <NavButton icon={<CheckCircle2 />} label="评估追踪" active={view === "evaluation"} onClick={() => { setSelectedCellKey(null); setView("evaluation"); }} />
+          <NavButton icon={<Code2 />} label="接口中心" active={view === "api"} onClick={() => { setSelectedCellKey(null); setView("api"); }} />
         </nav>
 
         <div className="sidebar-footer">
@@ -1788,6 +1792,13 @@ export default function App() {
             onCloseCell={() => setSelectedCellKey(null)}
             onOpenAgent={openAgent}
             onPlaceAgent={placeAgent}
+          />
+        )}
+
+        {view === "matrix-b" && (
+          <MatrixPageB
+            agents={state.agents}
+            onOpenAgent={openAgent}
           />
         )}
 
@@ -2006,108 +2017,110 @@ function TrainingRunModal({
           </div>
         </div>
 
-        <div className="training-modal-grid">
-          <section className="training-live-panel">
-            <div className="run-config-head">
-              <div>
-                <div className="eyebrow">Current Stage</div>
-                <h3>{activeStep.title}</h3>
-              </div>
-              <span>{activeStep.metric}</span>
-            </div>
-            <p>{activeStep.detail}</p>
-            <div className="training-terminal">
-              {visibleSteps.map((step, index) => (
-                <div key={step.title}>
-                  <span>{String(index + 1).padStart(2, "0")}</span>
-                  <strong>{step.title}</strong>
-                  <em>{step.status}</em>
-                  <p>{step.detail}</p>
+        <div className="training-modal-body">
+          <div className="training-modal-grid">
+            <section className="training-live-panel">
+              <div className="run-config-head">
+                <div>
+                  <div className="eyebrow">Current Stage</div>
+                  <h3>{activeStep.title}</h3>
                 </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="training-result-panel">
-            <div className="modal-score-ring">
-              <strong>{run.result.scoreAfter}</strong>
-              <span>质量分</span>
-            </div>
-            <div className="modal-metric-grid">
-              <div>
-                <span>版本</span>
-                <strong>{`${run.result.versionBefore} -> ${run.result.versionAfter}`}</strong>
+                <span>{activeStep.metric}</span>
               </div>
-              <div>
-                <span>提升点</span>
-                <strong>{deltaLabel}</strong>
-              </div>
-              <div>
-                <span>通过率</span>
-                <strong>{run.result.passRate}%</strong>
-              </div>
-              <div>
-                <span>置信度</span>
-                <strong>{run.result.confidence}%</strong>
-              </div>
-              <div>
-                <span>规则验证</span>
-                <strong>{run.result.rulesVerified} 条</strong>
-              </div>
-              <div>
-                <span>工具调用</span>
-                <strong>{run.result.toolsVerified} 个</strong>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        {run.completed && run.clusters.length > 0 && (
-          <div className="training-cluster-summary">
-            <div className="section-title small">
-              <Filter size={16} />
-              失败聚类结果
-            </div>
-            <div className="cluster-card-list">
-              {run.clusters.map((cluster) => (
-                <div className="cluster-card" key={cluster.id}>
-                  <div className="cluster-card-header">
-                    <span className={`proposal-unit-pill ${unitColors[cluster.targetUnit] ?? ""}`}>
-                      {cluster.targetUnit === "few-shot" ? "Few-shot" : cluster.targetUnit === "rule" ? "规则" : cluster.targetUnit === "retrieval" ? "检索" : cluster.targetUnit === "instruction" ? "指令" : "参数"}
-                    </span>
-                    <strong>{cluster.label}</strong>
-                    <span className="cluster-case-count">{cluster.caseCount} 个用例</span>
+              <p>{activeStep.detail}</p>
+              <div className="training-terminal">
+                {visibleSteps.map((step, index) => (
+                  <div key={step.title}>
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <strong>{step.title}</strong>
+                    <em>{step.status}</em>
+                    <p>{step.detail}</p>
                   </div>
-                  <p>{cluster.diagnosis}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+                ))}
+              </div>
+            </section>
 
-        <div className="training-report-grid">
-          <section>
-            <div className="section-title small">
-              <Sparkles size={16} />
-              本轮改动点
+            <section className="training-result-panel">
+              <div className="modal-score-ring">
+                <strong>{run.result.scoreAfter}</strong>
+                <span>质量分</span>
+              </div>
+              <div className="modal-metric-grid">
+                <div>
+                  <span>版本</span>
+                  <strong>{`${run.result.versionBefore} -> ${run.result.versionAfter}`}</strong>
+                </div>
+                <div>
+                  <span>提升点</span>
+                  <strong>{deltaLabel}</strong>
+                </div>
+                <div>
+                  <span>通过率</span>
+                  <strong>{run.result.passRate}%</strong>
+                </div>
+                <div>
+                  <span>置信度</span>
+                  <strong>{run.result.confidence}%</strong>
+                </div>
+                <div>
+                  <span>规则验证</span>
+                  <strong>{run.result.rulesVerified} 条</strong>
+                </div>
+                <div>
+                  <span>工具调用</span>
+                  <strong>{run.result.toolsVerified} 个</strong>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          {run.completed && run.clusters.length > 0 && (
+            <div className="training-cluster-summary">
+              <div className="section-title small">
+                <Filter size={16} />
+                失败聚类结果
+              </div>
+              <div className="cluster-card-list">
+                {run.clusters.map((cluster) => (
+                  <div className="cluster-card" key={cluster.id}>
+                    <div className="cluster-card-header">
+                      <span className={`proposal-unit-pill ${unitColors[cluster.targetUnit] ?? ""}`}>
+                        {cluster.targetUnit === "few-shot" ? "Few-shot" : cluster.targetUnit === "rule" ? "规则" : cluster.targetUnit === "retrieval" ? "检索" : cluster.targetUnit === "instruction" ? "指令" : "参数"}
+                      </span>
+                      <strong>{cluster.label}</strong>
+                      <span className="cluster-case-count">{cluster.caseCount} 个用例</span>
+                    </div>
+                    <p>{cluster.diagnosis}</p>
+                  </div>
+                ))}
+              </div>
             </div>
-            <ul className="modal-change-list">
-              {run.result.changes.map((change) => (
-                <li key={change}>{change}</li>
-              ))}
-            </ul>
-          </section>
-          <section>
-            <div className="section-title small">
-              <ShieldCheck size={16} />
-              下一轮建议
-            </div>
-            <ul className="modal-change-list">
-              {run.result.recommendations.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </section>
+          )}
+
+          <div className="training-report-grid">
+            <section>
+              <div className="section-title small">
+                <Sparkles size={16} />
+                本轮改动点
+              </div>
+              <ul className="modal-change-list">
+                {run.result.changes.map((change) => (
+                  <li key={change}>{change}</li>
+                ))}
+              </ul>
+            </section>
+            <section>
+              <div className="section-title small">
+                <ShieldCheck size={16} />
+                下一轮建议
+              </div>
+              <ul className="modal-change-list">
+                {run.result.recommendations.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </section>
+          </div>
         </div>
 
         <div className={`training-modal-footer ${run.completed ? "complete" : ""}`}>
@@ -2712,6 +2725,22 @@ function MatrixPage({
 
   const selectedAgent = selectedCellKey ? agentByCell[selectedCellKey] : undefined;
 
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!selectedCellKey) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Element;
+      if (panelRef.current && !panelRef.current.contains(target as Node)) {
+        // clicking another matrix cell → let openCell update the panel in-place
+        if (target.closest?.(".matrix-cell")) return;
+        onCloseCell();
+      }
+    };
+    // small delay so the click that opens the panel doesn't immediately close it
+    const timer = setTimeout(() => document.addEventListener("mousedown", handler), 100);
+    return () => { clearTimeout(timer); document.removeEventListener("mousedown", handler); };
+  }, [selectedCellKey, onCloseCell]);
+
   const visibleWorkFlows = workFlows.filter((work) => workFilter === "all" || work.id === workFilter);
   const matchesCell = (key: string, agent?: Agent) => {
     const state = getCellState(agent).className;
@@ -2769,55 +2798,59 @@ function MatrixPage({
         </div>
       </div>
 
-      <div className="matrix-wrap">
-        <div className={`matrix-table ${heatmap ? "heatmap" : ""}`} role="grid" aria-label="Work Flow x Functional Flow 矩阵">
-          <div className="matrix-corner">
-            <span className="corner-functional">Functional Flow</span>
-            <span className="corner-work">Work Flow</span>
+      <div className="matrix-body">
+        <div className="matrix-wrap">
+          <div className={`matrix-table ${heatmap ? "heatmap" : ""}`} role="grid" aria-label="Work Flow x Functional Flow 矩阵">
+            <div className="matrix-corner">
+              <span className="corner-functional">Functional Flow</span>
+              <span className="corner-work">Work Flow</span>
+            </div>
+            {functionalFlows.map((flow) => (
+              <div className="matrix-header" key={flow.id}>
+                {flow.label}
+              </div>
+            ))}
+            {visibleWorkFlows.map((work) => (
+              <div className="matrix-row" key={work.id}>
+                <div className="matrix-side">{work.label}</div>
+                {functionalFlows.map((func) => {
+                  const key = cellKey(work.id, func.id);
+                  const agent = agentByCell[key];
+                  const state = getCellState(agent);
+                  const visible = matchesCell(key, agent);
+                  return (
+                    <button
+                      className={`matrix-cell ${state.className} ${highlightedCell === key ? "highlight" : ""} ${visible ? "" : "dimmed"}`}
+                      key={key}
+                      type="button"
+                      onClick={() => onOpenCell(key)}
+                      onDoubleClick={() => agent && onOpenAgent(agent.id)}
+                      aria-label={`${work.label} ${func.label} ${agent?.name ?? "待规划"}`}
+                    >
+                      <span className={`status-dot ${state.className}`} />
+                      <span className="cell-status">{state.label}</span>
+                      <span className="cell-agent">{agent?.name ?? "待规划"}</span>
+                      {agent && <span className="cell-score">{agent.version} / {agent.score}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </div>
-          {functionalFlows.map((flow) => (
-            <div className="matrix-header" key={flow.id}>
-              {flow.label}
-            </div>
-          ))}
-          {visibleWorkFlows.map((work) => (
-            <div className="matrix-row" key={work.id}>
-              <div className="matrix-side">{work.label}</div>
-              {functionalFlows.map((func) => {
-                const key = cellKey(work.id, func.id);
-                const agent = agentByCell[key];
-                const state = getCellState(agent);
-                const visible = matchesCell(key, agent);
-                return (
-                  <button
-                    className={`matrix-cell ${state.className} ${highlightedCell === key ? "highlight" : ""} ${visible ? "" : "dimmed"}`}
-                    key={key}
-                    type="button"
-                    onClick={() => onOpenCell(key)}
-                    aria-label={`${work.label} ${func.label} ${agent?.name ?? "待规划"}`}
-                  >
-                    <span className={`status-dot ${state.className}`} />
-                    <span className="cell-status">{state.label}</span>
-                    <span className="cell-agent">{agent?.name ?? "待规划"}</span>
-                    {agent && <span className="cell-score">{agent.version} / {agent.score}</span>}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
         </div>
-      </div>
 
-      {selectedCellKey && (
-        <NodePanel
-          cellKeyValue={selectedCellKey}
-          agent={selectedAgent}
-          agents={agents}
-          onClose={onCloseCell}
-          onOpenAgent={onOpenAgent}
-          onPlaceAgent={onPlaceAgent}
-        />
-      )}
+        {selectedCellKey && (
+          <NodePanel
+            cellKeyValue={selectedCellKey}
+            agent={selectedAgent}
+            agents={agents}
+            onClose={onCloseCell}
+            onOpenAgent={onOpenAgent}
+            onPlaceAgent={onPlaceAgent}
+            panelRef={panelRef}
+          />
+        )}
+      </div>
     </section>
   );
 }
@@ -2829,6 +2862,7 @@ function NodePanel({
   onClose,
   onOpenAgent,
   onPlaceAgent,
+  panelRef,
 }: {
   cellKeyValue: string;
   agent?: Agent;
@@ -2836,21 +2870,30 @@ function NodePanel({
   onClose: () => void;
   onOpenAgent: (agentId: string) => void;
   onPlaceAgent: (agentId: string, targetCellKey: string) => void;
+  panelRef: React.RefObject<HTMLElement>;
 }) {
   const [selectedId, setSelectedId] = useState(agent?.id ?? agents[0]?.id ?? "");
+  const [showPlacement, setShowPlacement] = useState(!agent);
 
   useEffect(() => {
     setSelectedId(agent?.id ?? agents[0]?.id ?? "");
-  }, [agent?.id, agents]);
+    setShowPlacement(!agent);
+  }, [agent?.id, agents, agent]);
 
   const cellState = getCellState(agent);
+  const scoreColor = (agent?.score ?? 0) >= 85 ? "green" : (agent?.score ?? 0) >= 70 ? "amber" : "red";
 
   return (
-    <aside className="node-panel" aria-label="节点详情">
-      <div className="panel-header">
-        <div>
-          <div className="eyebrow">节点详情</div>
-          <h2>{describeCell(cellKeyValue)}</h2>
+    <aside className="node-panel" ref={panelRef as React.RefObject<HTMLElement>} aria-label="节点训练概览">
+      {/* Header */}
+      <div className="node-panel-header">
+        <div className="node-panel-header-text">
+          <div className="node-panel-location">{describeCell(cellKeyValue)}</div>
+          <div className="node-panel-name">{agent ? agent.name : "待配置节点"}</div>
+          <div className="node-panel-badges">
+            <span className={`pill ${cellState.className}`}>{cellState.label}</span>
+            {agent && <span className="node-panel-version">{agent.version}</span>}
+          </div>
         </div>
         <button className="icon-button" onClick={onClose} type="button" aria-label="关闭">
           <X size={18} />
@@ -2858,52 +2901,405 @@ function NodePanel({
       </div>
 
       {agent ? (
-        <div className="agent-summary-block">
-          <span className={`pill ${cellState.className}`}>{cellState.label}</span>
-          <h3>{agent.name}</h3>
-          <p>{agent.purpose}</p>
-          <div className="mini-grid">
-            <span>类型</span>
-            <strong>{agent.type}</strong>
-            <span>版本</span>
-            <strong>{agent.version}</strong>
-            <span>评分</span>
-            <strong>{agent.score}</strong>
+        <div className="node-panel-body">
+          {/* 3 metric cards */}
+          <div className="np-metrics">
+            <div className="np-metric">
+              <span className="np-metric-label">当前评分</span>
+              <strong className={`np-metric-value ${scoreColor}`}>{agent.score}</strong>
+            </div>
+            <div className="np-metric">
+              <span className="np-metric-label">生命周期</span>
+              <strong className="np-metric-value">{statusCopy[agent.status]}</strong>
+            </div>
+            <div className="np-metric">
+              <span className="np-metric-label">矩阵节点</span>
+              <strong className="np-metric-value">{agent.matrixCellKey ? "已放置" : "未放置"}</strong>
+            </div>
           </div>
-          <button className="secondary-button" type="button" onClick={() => onOpenAgent(agent.id)}>
-            <ArrowRight size={16} />
-            进入 Agent 管理
-          </button>
+
+          {/* Mini info rows */}
+          <div className="np-mini-grid">
+            <span>节点</span>
+            <strong>{agent.matrixCellKey ? describeCell(agent.matrixCellKey) : "发布时选择"}</strong>
+            <span>案例</span>
+            <strong>{agent.caseUploaded ? "已上传模拟案例" : "待上传模拟案例"}</strong>
+          </div>
+
+          <hr className="np-divider" />
+
+          {/* Input / Output schema */}
+          {(agent.inputSchema ?? []).length > 0 && (
+            <div className="np-schema-block">
+              <div className="np-schema-label">输入字段</div>
+              <div className="np-schema-tags">
+                {(agent.inputSchema ?? []).map((f) => (
+                  <span key={f} className="np-schema-tag">{f}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {(agent.outputSchema ?? []).length > 0 && (
+            <div className="np-schema-block">
+              <div className="np-schema-label">输出字段</div>
+              <div className="np-schema-tags">
+                {(agent.outputSchema ?? []).map((f) => (
+                  <span key={f} className="np-schema-tag">{f}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
         </div>
       ) : (
-        <div className="agent-summary-block muted">
-          <span className="pill planned">{emptyState.title}</span>
-          <h3>{emptyState.title}</h3>
-          <p>{emptyState.text}</p>
+        <div className="node-panel-body">
+          <div className="np-empty-state">
+            <span className="pill planned">待配置</span>
+            <h3>该节点尚未配置 Agent</h3>
+            <p>选择一个 Agent 放置到此节点，完成矩阵覆盖。</p>
+          </div>
         </div>
       )}
 
-      <div className="placement-box">
-        <div className="section-title">
-          <Route size={16} />
-          轻量放置 / 替换
-        </div>
-        <label className="field-label" htmlFor="placement-agent">
-          选择 Agent
-        </label>
-        <select id="placement-agent" value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
-          {agents.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name} / {statusCopy[item.status]}
-            </option>
-          ))}
-        </select>
-        <button className="primary-button full" type="button" onClick={() => onPlaceAgent(selectedId, cellKeyValue)}>
-          <Save size={16} />
-          放置到该节点
+      {/* Footer */}
+      <div className="node-panel-footer">
+        {agent && (
+          <button className="primary-button full" type="button" onClick={() => onOpenAgent(agent.id)}>
+            <ArrowRight size={16} />
+            进入训练配置
+          </button>
+        )}
+        <button className="np-placement-toggle" type="button" onClick={() => setShowPlacement((v) => !v)}>
+          <ChevronDown size={14} style={{ transform: showPlacement ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
+          {showPlacement ? "收起" : "调整节点放置"}
         </button>
+        {showPlacement && (
+          <div className="np-placement-area">
+            <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
+              {agents.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} / {statusCopy[item.status]}
+                </option>
+              ))}
+            </select>
+            <button className="secondary-button full" type="button" onClick={() => onPlaceAgent(selectedId, cellKeyValue)}>
+              <Save size={16} />
+              放置到该节点
+            </button>
+          </div>
+        )}
       </div>
     </aside>
+  );
+}
+
+// ── Matrix B ─────────────────────────────────────────────────────────────────
+
+const STATUS_LABEL_B: Record<AgentStatus, string> = { draft: "待训练", trained: "已训练", published: "已发布" };
+const STATUS_CLASS_B: Record<AgentStatus, string> = { draft: "training", trained: "trained", published: "published" };
+
+function NodePanelB({
+  cellKeyValue,
+  agents,
+  onClose,
+  onOpenAgent,
+  panelRef,
+}: {
+  cellKeyValue: string;
+  agents: Agent[];
+  onClose: () => void;
+  onOpenAgent: (agentId: string) => void;
+  panelRef: React.RefObject<HTMLElement>;
+}) {
+  const publishedCount = agents.filter((a) => a.status === "published").length;
+  const trainedCount = agents.filter((a) => a.status === "trained").length;
+  const draftCount = agents.filter((a) => a.status === "draft").length;
+  const coverageRate = agents.length > 0 ? Math.round(((publishedCount + trainedCount) / agents.length) * 100) : 0;
+
+  return (
+    <aside className="node-panel node-panel-b" ref={panelRef as React.RefObject<HTMLDivElement>}>
+      {/* header */}
+      <div className="npb-header">
+        <div className="npb-header-left">
+          <p className="npb-location">{describeCell(cellKeyValue)}</p>
+          <h3 className="npb-title">节点 Agent 总览</h3>
+        </div>
+        <button className="ghost-button compact" type="button" onClick={onClose} aria-label="关闭">
+          <X size={16} />
+        </button>
+      </div>
+
+      {/* stat strip */}
+      <div className="npb-stat-strip">
+        <div className="npb-stat-item">
+          <span className="npb-stat-num">{agents.length}</span>
+          <span className="npb-stat-lbl">总 Agent</span>
+        </div>
+        <div className="npb-stat-divider" />
+        <div className="npb-stat-item npb-si-published">
+          <CheckCircle2 size={13} />
+          <span className="npb-stat-num">{publishedCount}</span>
+          <span className="npb-stat-lbl">已发布</span>
+        </div>
+        <div className="npb-stat-divider" />
+        <div className="npb-stat-item npb-si-trained">
+          <Zap size={13} />
+          <span className="npb-stat-num">{trainedCount}</span>
+          <span className="npb-stat-lbl">已训练</span>
+        </div>
+        <div className="npb-stat-divider" />
+        <div className="npb-stat-item npb-si-draft">
+          <Clock size={13} />
+          <span className="npb-stat-num">{draftCount}</span>
+          <span className="npb-stat-lbl">待训练</span>
+        </div>
+      </div>
+
+      {/* coverage bar */}
+      {agents.length > 0 && (
+        <div className="npb-coverage">
+          <div className="npb-coverage-label">
+            <span>就绪进度</span>
+            <strong>{coverageRate}%</strong>
+          </div>
+          <div className="npb-coverage-bar">
+            <div className="npb-coverage-fill" style={{ width: `${coverageRate}%` }} />
+          </div>
+        </div>
+      )}
+
+      {/* agent list */}
+      <div className="npb-list-header">
+        <span>Agent 列表</span>
+        <span className="npb-list-count">{agents.length} 个</span>
+      </div>
+
+      <div className="npb-agent-list">
+        {agents.length === 0 ? (
+          <div className="npb-empty">
+            <Bot size={32} />
+            <p>此节点暂无 Agent</p>
+            <span>在 Agent 管理页面中将 Agent 放置到此节点</span>
+          </div>
+        ) : (
+          agents.map((agent) => (
+            <div className={`npb-agent-card status-border-${STATUS_CLASS_B[agent.status]}`} key={agent.id}>
+              <div className="npb-card-top">
+                <div className="npb-card-left">
+                  <span className="npb-card-name">{agent.name}</span>
+                  <div className="npb-card-badges">
+                    <span className={`pill ${STATUS_CLASS_B[agent.status]}`}>{STATUS_LABEL_B[agent.status]}</span>
+                    <span className="npb-card-version">{agent.version}</span>
+                    <span className="npb-card-type">{agent.type}</span>
+                  </div>
+                </div>
+                <div className="npb-card-score-wrap">
+                  <span className={`npb-card-score ${agent.score >= 80 ? "green" : agent.score >= 60 ? "amber" : "red"}`}>
+                    {agent.score}
+                  </span>
+                  <span className="npb-card-score-lbl">分</span>
+                </div>
+              </div>
+              {agent.purpose && <p className="npb-card-purpose">{agent.purpose}</p>}
+              <div className="npb-card-footer">
+                <button className="npb-enter-btn" type="button" onClick={() => onOpenAgent(agent.id)}>
+                  进入配置
+                  <ArrowRight size={13} />
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function MatrixPageB({
+  agents,
+  onOpenAgent,
+}: {
+  agents: Agent[];
+  onOpenAgent: (agentId: string) => void;
+}) {
+  const [selectedCellKey, setSelectedCellKey] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "published" | "trained" | "draft" | "empty">("all");
+  const [workFilter, setWorkFilter] = useState("all");
+  const panelRef = useRef<HTMLElement>(null);
+
+  const agentsByCell = useMemo(() => {
+    const map: Record<string, Agent[]> = {};
+    agents.forEach((agent) => {
+      if (agent.matrixCellKey) {
+        if (!map[agent.matrixCellKey]) map[agent.matrixCellKey] = [];
+        map[agent.matrixCellKey].push(agent);
+      }
+    });
+    return map;
+  }, [agents]);
+
+  const getCellStateB = (cellAgents: Agent[]) => {
+    if (cellAgents.length === 0) return { bestStatus: "empty", publishedCount: 0, trainedCount: 0, total: 0 };
+    const publishedCount = cellAgents.filter((a) => a.status === "published").length;
+    const trainedCount = cellAgents.filter((a) => a.status === "trained").length;
+    const bestStatus = publishedCount > 0 ? "published" : trainedCount > 0 ? "trained" : "draft";
+    return { bestStatus, publishedCount, trainedCount, total: cellAgents.length };
+  };
+
+  useEffect(() => {
+    if (!selectedCellKey) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Element;
+      if (panelRef.current && !panelRef.current.contains(target as Node)) {
+        if (target.closest?.(".matrix-cell")) return;
+        setSelectedCellKey(null);
+      }
+    };
+    const timer = setTimeout(() => document.addEventListener("mousedown", handler), 100);
+    return () => { clearTimeout(timer); document.removeEventListener("mousedown", handler); };
+  }, [selectedCellKey]);
+
+  const totalCells = workFlows.length * functionalFlows.length;
+  const occupiedCells = Object.keys(agentsByCell).length;
+  const publishedAgents = agents.filter((a) => a.status === "published").length;
+  const trainedAgents = agents.filter((a) => a.status === "trained").length;
+  const avgScore = Math.round(agents.reduce((s, a) => s + a.score, 0) / Math.max(agents.length, 1));
+  const selectedAgents = selectedCellKey ? (agentsByCell[selectedCellKey] ?? []) : [];
+
+  const visibleWorkFlows = workFlows.filter((w) => workFilter === "all" || w.id === workFilter);
+
+  const matchesCellB = (key: string, cellAgents: Agent[], bestStatus: string) => {
+    const hitStatus = statusFilter === "all" || bestStatus === statusFilter;
+    const text = `${describeCell(key)} ${cellAgents.map((a) => a.name).join(" ")}`.toLowerCase();
+    const hitQuery = !query || text.includes(query.toLowerCase());
+    return hitStatus && hitQuery;
+  };
+
+  return (
+    <section className="page page-matrix">
+      <div className="page-sticky-zone">
+        <PageHeader
+          eyebrow="Work Flow x Functional Flow · 多 Agent 节点视图"
+          title="矩阵看板 B"
+        />
+
+        <div className="metric-row wide-metrics">
+          <Metric icon={<Bot />}        label="Agent 总数"   value={agents.length.toString()} />
+          <Metric icon={<Grid3X3 />}    label="已配置节点"   value={`${occupiedCells}/${totalCells}`} />
+          <Metric icon={<Rocket />}     label="已发布 Agent" value={publishedAgents.toString()} tone="green" />
+          <Metric icon={<Zap />}        label="已训练 Agent" value={trainedAgents.toString()} tone={trainedAgents > 0 ? "amber" : undefined} />
+          <Metric icon={<Star />}       label="平均质量分"   value={avgScore.toString()} tone={avgScore >= 86 ? "green" : "amber"} />
+        </div>
+
+        <div className="matrix-control-bar">
+          <label className="search-box">
+            <Search size={16} />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索节点、Agent、类型" />
+          </label>
+          <label className="select-box">
+            <Filter size={16} />
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}>
+              <option value="all">全部节点</option>
+              <option value="published">含已发布</option>
+              <option value="trained">含已训练</option>
+              <option value="draft">仅待训练</option>
+              <option value="empty">未配置</option>
+            </select>
+          </label>
+          <label className="select-box">
+            <Route size={16} />
+            <select value={workFilter} onChange={(e) => setWorkFilter(e.target.value)}>
+              <option value="all">全部 Work Flow</option>
+              {workFlows.map((w) => (
+                <option key={w.id} value={w.id}>{w.label}</option>
+              ))}
+            </select>
+          </label>
+          <div className="b-legend">
+            <span className="b-lg published"><CheckCircle2 size={11} />已发布</span>
+            <span className="b-lg trained"><Zap size={11} />已训练</span>
+            <span className="b-lg draft"><Clock size={11} />待训练</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Grid ── */}
+      <div className="matrix-body">
+        <div className="matrix-wrap">
+          <div className="matrix-table matrix-table-b" role="grid" aria-label="矩阵看板B">
+            <div className="matrix-corner">
+              <span className="corner-functional">Functional Flow</span>
+              <span className="corner-work">Work Flow</span>
+            </div>
+            {functionalFlows.map((flow) => (
+              <div className="matrix-header" key={flow.id}>{flow.label}</div>
+            ))}
+            {visibleWorkFlows.map((work) => (
+              <div className="matrix-row" key={work.id}>
+                <div className="matrix-side">{work.label}</div>
+                {functionalFlows.map((func) => {
+                  const key = cellKey(work.id, func.id);
+                  const cellAgents = agentsByCell[key] ?? [];
+                  const { bestStatus, publishedCount, trainedCount, total } = getCellStateB(cellAgents);
+                  const highlighted = selectedCellKey === key;
+                  const visible = matchesCellB(key, cellAgents, bestStatus);
+
+                  return (
+                    <button
+                      className={`matrix-cell matrix-cell-b bs-${bestStatus} ${highlighted ? "b-highlighted" : ""} ${visible ? "" : "dimmed"}`}
+                      key={key}
+                      type="button"
+                      onClick={() => setSelectedCellKey(selectedCellKey === key ? null : key)}
+                      aria-label={`${work.label} × ${func.label}，共 ${total} 个 Agent`}
+                    >
+                      {bestStatus === "empty" ? (
+                        <span className="b-empty-dash">—</span>
+                      ) : (
+                        <>
+                          <span className={`b-main-icon bmi-${bestStatus}`}>
+                            {bestStatus === "published" && <CheckCircle2 size={18} />}
+                            {bestStatus === "trained" && <Zap size={18} />}
+                            {bestStatus === "draft" && <Clock size={18} />}
+                          </span>
+                          <span className="b-fraction">
+                            <span className="b-frac-ready">{publishedCount + trainedCount}</span>
+                            <span className="b-frac-sep">/</span>
+                            <span className="b-frac-total">{total}</span>
+                          </span>
+                          <div className="b-dot-row">
+                            {cellAgents.slice(0, 6).map((a) => (
+                              <span
+                                key={a.id}
+                                className={`b-dot bdot-${STATUS_CLASS_B[a.status]}`}
+                                title={a.name}
+                              />
+                            ))}
+                            {cellAgents.length > 6 && (
+                              <span className="b-dot-more">+{cellAgents.length - 6}</span>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {selectedCellKey && (
+          <NodePanelB
+            cellKeyValue={selectedCellKey}
+            agents={selectedAgents}
+            onClose={() => setSelectedCellKey(null)}
+            onOpenAgent={onOpenAgent}
+            panelRef={panelRef}
+          />
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -4282,6 +4678,7 @@ function AgentDetailPage({
   const [publishFunc, setPublishFunc] = useState(agent.matrixCellKey?.split(":")[1] ?? "contract-registrar");
   const [ruleToAttach, setRuleToAttach] = useState(ruleLibrary[0]?.id ?? "");
   const [contextDocInput, setContextDocInput] = useState("");
+  const [expandedCaseId, setExpandedCaseId] = useState<string | null>(null);
   const [activeDetailSection, setActiveDetailSection] = useState("detail-overview");
   const [detailSlideDirection, setDetailSlideDirection] = useState<"forward" | "backward">("forward");
   const isTraining = trainingAgentId === agent.id;
@@ -4662,6 +5059,46 @@ function AgentDetailPage({
     onNotify("测试用例已新增");
   };
 
+  const bulkUploadTestCases = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const text = ev.target?.result as string;
+        let rows: Record<string, string>[] = [];
+        if (file.name.endsWith(".json")) {
+          rows = JSON.parse(text);
+        } else {
+          const lines = text.trim().split("\n");
+          const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
+          rows = lines.slice(1).map((line) => {
+            const vals = line.split(",").map((v) => v.trim().replace(/^"|"$/g, ""));
+            return Object.fromEntries(headers.map((h, i) => [h, vals[i] ?? ""]));
+          });
+        }
+        if (!Array.isArray(rows)) throw new Error();
+        const newCases: TestCase[] = rows.map((c) => ({
+          id: `tc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          name: c.name ?? "导入用例",
+          input: c.input ?? "",
+          expected: c.expected ?? "",
+          status: (["通过", "待验证", "需优化"].includes(c.status) ? c.status : "待验证") as TestCase["status"],
+          type: (["正常", "异常", "边界", "对抗"].includes(c.type) ? c.type : undefined) as TestCase["type"],
+          difficulty: (["简单", "中等", "困难"].includes(c.difficulty) ? c.difficulty : undefined) as TestCase["difficulty"],
+          split: c.split === "holdout" ? "holdout" : "train",
+          judgment: null,
+        }));
+        onUpdateAgent(agent.id, (item) => ({ ...item, testCases: [...item.testCases, ...newCases] }));
+        onNotify(`批量导入 ${newCases.length} 条测试用例`);
+      } catch {
+        onNotify("文件解析失败，请检查格式（JSON 数组或 CSV）");
+      }
+      e.target.value = "";
+    };
+    reader.readAsText(file);
+  };
+
   const deleteTestCase = (testCaseId: string) => {
     onUpdateAgent(agent.id, (item) => ({
       ...item,
@@ -4816,6 +5253,7 @@ function AgentDetailPage({
               onChange={(tags) => onUpdateAgent(agent.id, (item) => ({ ...item, outputSchema: tags }))}
             />
           </div>
+
         </section>
 
         <div className={paneClass("detail-prompt", "detail-block-heading span-2")}>
@@ -4838,12 +5276,13 @@ function AgentDetailPage({
             </button>
           </div>
           {(agent.instructionSegments ?? []).length > 0 ? (
+            <>
             <div className="instruction-segments">
               {(agent.instructionSegments ?? []).map((seg) => (
                 <div className="instruction-segment-card" key={seg.id}>
                   <div className="segment-label-row">
                     <select
-                      className={`segment-label-select segment-label-${seg.label === "角色" ? "role" : seg.label === "任务" ? "task" : seg.label === "约束" ? "constraint" : "output"}`}
+                      className={`segment-label-select segment-label-${seg.label === "角色" ? "role" : seg.label === "任务" ? "task" : seg.label === "约束" ? "constraint" : seg.label === "异常处理" ? "exception" : seg.label === "处理目标" ? "goal" : "output"}`}
                       value={seg.label}
                       onChange={(e) =>
                         onUpdateAgent(agent.id, (item) => ({
@@ -4858,6 +5297,8 @@ function AgentDetailPage({
                       <option value="任务">任务</option>
                       <option value="约束">约束</option>
                       <option value="输出格式">输出格式</option>
+                      <option value="异常处理">异常处理</option>
+                      <option value="处理目标">处理目标</option>
                     </select>
                     <button className="ghost-button compact danger-button" type="button" onClick={() => deleteInstructionSegment(seg.id)}>
                       删除
@@ -4878,6 +5319,7 @@ function AgentDetailPage({
                 </div>
               ))}
             </div>
+            </>
           ) : (
             <div className="empty-whitebox">
               <p>暂无指令分段。系统可在训练审查时自动生成分段建议，或点击上方"添加段"手动创建。</p>
@@ -4967,7 +5409,7 @@ function AgentDetailPage({
           </div>
         </div>
 
-        <section className={paneClass("detail-guardrails", "panel")}>
+        <section className={paneClass("detail-guardrails", "panel span-2")}>
           <div className="section-title with-action">
             <span>
               <ShieldCheck size={16} />
@@ -4988,6 +5430,200 @@ function AgentDetailPage({
                 </button>
               </div>
             ))}
+          </div>
+
+          <hr className="section-divider" />
+
+          <div className="section-title with-action">
+            <span>
+              <FileText size={16} />
+              上下文文档索引
+            </span>
+            <span className="context-docs-hint">每次 Agent 调用前自动读取</span>
+          </div>
+          <p className="context-docs-desc">上传本 Agent 专属文档，执行引擎在每次调用时优先检索这些文档，补充知识库未覆盖的专项内容。</p>
+          <div className="context-doc-list">
+            {(agent.contextDocs ?? []).map((doc) => (
+              <div className="context-doc-row" key={doc.id}>
+                <span className={`context-doc-status status-${doc.status}`}>
+                  {doc.status === "indexing" ? "索引中…" : doc.status === "ready" ? "已就绪" : "错误"}
+                </span>
+                <span className="context-doc-name">{doc.name}</span>
+                <small className="context-doc-time">{doc.uploadedAt}</small>
+                <button className="ghost-button compact danger-button" type="button" onClick={() => removeContextDoc(doc.id)}>
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+            {(agent.contextDocs ?? []).length === 0 && (
+              <p className="context-docs-empty">暂无专属文档。添加后每次调用自动检索。</p>
+            )}
+          </div>
+          <div className="context-doc-add-row">
+            <input
+              className="context-doc-input"
+              value={contextDocInput}
+              onChange={(e) => setContextDocInput(e.target.value)}
+              placeholder="文档名称（如：合同审查补充规范 v2.pdf）"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && contextDocInput.trim()) {
+                  addContextDoc(contextDocInput);
+                  setContextDocInput("");
+                }
+              }}
+            />
+            <button
+              className="secondary-button compact"
+              type="button"
+              onClick={() => { if (contextDocInput.trim()) { addContextDoc(contextDocInput); setContextDocInput(""); } }}
+            >
+              <Plus size={14} />
+              上传文档
+            </button>
+          </div>
+
+          <hr className="section-divider" />
+
+          <div className="section-title with-action">
+            <span>
+              <CheckCircle2 size={16} />
+              测试案例库
+            </span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <label className="secondary-button compact" style={{ cursor: "pointer" }}>
+                <Upload size={14} />
+                批量上传
+                <input type="file" accept=".json,.csv" style={{ display: "none" }} onChange={bulkUploadTestCases} />
+              </label>
+              <button className="ghost-button compact" type="button" onClick={addTestCase}>
+                <Plus size={15} />
+                添加用例
+              </button>
+            </div>
+          </div>
+          {agent.rules.length > 0 && (() => {
+            const coveredRuleIds = new Set(agent.testCases.flatMap((tc) => tc.ruleRefs ?? []));
+            const redLineRuleIds = new Set(agent.rules.filter((r) => r.redLineLevel).map((r) => r.id));
+            const coveredRedLine = agent.rules.filter((r) => r.redLineLevel && coveredRuleIds.has(r.id)).length;
+            return (
+              <div className="case-coverage-summary">
+                <span>规则覆盖 <strong>{coveredRuleIds.size}/{agent.rules.length}</strong></span>
+                <span>红线覆盖 <strong>{coveredRedLine}/{redLineRuleIds.size}</strong></span>
+              </div>
+            );
+          })()}
+          <div className="case-row-list">
+            {agent.testCases.map((testCase, idx) => (
+              <div className={`case-row${expandedCaseId === testCase.id ? " expanded" : ""}`} key={testCase.id}>
+                <div
+                  className="case-row-header"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setExpandedCaseId(expandedCaseId === testCase.id ? null : testCase.id)}
+                  onKeyDown={(e) => e.key === "Enter" && setExpandedCaseId(expandedCaseId === testCase.id ? null : testCase.id)}
+                >
+                  <span className="case-row-index">{idx + 1}</span>
+                  {testCase.type && <span className={`case-type-badge type-${testCase.type}`}>{testCase.type}</span>}
+                  <span className="case-row-name">{testCase.name}</span>
+                  <span className={`pill ${testCase.status === "通过" ? "published" : testCase.status === "需优化" ? "draft" : "training"}`}>{testCase.status}</span>
+                  <span className={`case-split-toggle ${testCase.split === "holdout" ? "holdout" : "train"}`}>{testCase.split === "holdout" ? "留出集" : "训练集"}</span>
+                  <ChevronDown size={14} className={`case-row-chevron${expandedCaseId === testCase.id ? " open" : ""}`} />
+                </div>
+                {expandedCaseId === testCase.id && (
+                  <div className="case-row-body">
+                    <label className="case-row-label">用例名称</label>
+                    <input
+                      value={testCase.name}
+                      onChange={(e) => onUpdateAgent(agent.id, (item) => ({ ...item, testCases: item.testCases.map((t) => t.id === testCase.id ? { ...t, name: e.target.value } : t) }))}
+                    />
+                    <div className="case-row-selects">
+                      <select
+                        value={testCase.status}
+                        onChange={(e) => onUpdateAgent(agent.id, (item) => ({ ...item, testCases: item.testCases.map((t) => t.id === testCase.id ? { ...t, status: e.target.value as TestCase["status"] } : t) }))}
+                      >
+                        <option value="通过">通过</option>
+                        <option value="待验证">待验证</option>
+                        <option value="需优化">需优化</option>
+                      </select>
+                      <select
+                        value={testCase.type ?? ""}
+                        onChange={(e) => onUpdateAgent(agent.id, (item) => ({ ...item, testCases: item.testCases.map((t) => t.id === testCase.id ? { ...t, type: (e.target.value || undefined) as TestCase["type"] } : t) }))}
+                      >
+                        <option value="">类型（可选）</option>
+                        <option value="正常">正常</option>
+                        <option value="异常">异常</option>
+                        <option value="边界">边界</option>
+                        <option value="对抗">对抗</option>
+                      </select>
+                      <select
+                        value={testCase.difficulty ?? ""}
+                        onChange={(e) => onUpdateAgent(agent.id, (item) => ({ ...item, testCases: item.testCases.map((t) => t.id === testCase.id ? { ...t, difficulty: (e.target.value || undefined) as TestCase["difficulty"] } : t) }))}
+                      >
+                        <option value="">难度（可选）</option>
+                        <option value="简单">简单</option>
+                        <option value="中等">中等</option>
+                        <option value="困难">困难</option>
+                      </select>
+                      <button
+                        className={`case-split-toggle ${testCase.split === "holdout" ? "holdout" : "train"}`}
+                        type="button"
+                        onClick={() => onUpdateAgent(agent.id, (item) => ({ ...item, testCases: item.testCases.map((t) => t.id === testCase.id ? { ...t, split: t.split === "holdout" ? "train" : "holdout" } : t) }))}
+                      >
+                        {testCase.split === "holdout" ? "留出集" : "训练集"}
+                      </button>
+                    </div>
+                    <label className="case-row-label">输入</label>
+                    <textarea
+                      value={testCase.input}
+                      rows={3}
+                      onChange={(e) => onUpdateAgent(agent.id, (item) => ({ ...item, testCases: item.testCases.map((t) => t.id === testCase.id ? { ...t, input: e.target.value } : t) }))}
+                    />
+                    <label className="case-row-label">预期输出</label>
+                    <textarea
+                      value={testCase.expected}
+                      rows={3}
+                      onChange={(e) => onUpdateAgent(agent.id, (item) => ({ ...item, testCases: item.testCases.map((t) => t.id === testCase.id ? { ...t, expected: e.target.value } : t) }))}
+                    />
+                    <div className="case-judgment-row">
+                      <span className="case-judgment-label">你的判断</span>
+                      <button
+                        className={`judgment-btn pass${testCase.judgment === "pass" ? " active" : ""}`}
+                        type="button"
+                        onClick={() => onUpdateAgent(agent.id, (item) => ({ ...item, testCases: item.testCases.map((t) => t.id === testCase.id ? { ...t, judgment: t.judgment === "pass" ? null : "pass" } : t) }))}
+                      >
+                        <ThumbsUp size={13} />
+                        符合预期
+                      </button>
+                      <button
+                        className={`judgment-btn fail${testCase.judgment === "fail" ? " active" : ""}`}
+                        type="button"
+                        onClick={() => onUpdateAgent(agent.id, (item) => ({ ...item, testCases: item.testCases.map((t) => t.id === testCase.id ? { ...t, judgment: t.judgment === "fail" ? null : "fail" } : t) }))}
+                      >
+                        <ThumbsDown size={13} />
+                        有问题
+                      </button>
+                    </div>
+                    {testCase.judgment === "fail" && (
+                      <textarea
+                        className="judgment-note"
+                        value={testCase.judgmentNote ?? ""}
+                        placeholder="说说哪里有问题（可选，作为训练信号）"
+                        rows={2}
+                        onChange={(e) => onUpdateAgent(agent.id, (item) => ({ ...item, testCases: item.testCases.map((t) => t.id === testCase.id ? { ...t, judgmentNote: e.target.value } : t) }))}
+                      />
+                    )}
+                    <div className="case-row-footer">
+                      <button className="ghost-button compact danger-button" type="button" onClick={() => deleteTestCase(testCase.id)}>
+                        删除用例
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+            {agent.testCases.length === 0 && (
+              <p className="context-docs-empty">暂无测试用例。点击"添加用例"或批量上传 JSON/CSV 文件。</p>
+            )}
           </div>
         </section>
 
@@ -5382,7 +6018,7 @@ function AgentDetailPage({
             {agent.rules.map((rule) => {
               const isShared = !!rule.sourceRuleId;
               return (
-                <div className={`rule-card editable-rule ${isShared ? "rule-shared" : "rule-draft"}`} key={rule.id}>
+                <div className={`rule-item rule-card editable-rule ${isShared ? "rule-shared" : "rule-draft"} redline-${rule.redLineLevel ?? "none"}`} key={rule.id}>
                   <div className="rule-card-top">
                     <label className="rule-switch">
                       <input
@@ -5400,6 +6036,16 @@ function AgentDetailPage({
                       <option value="高">高</option>
                       <option value="中">中</option>
                       <option value="低">低</option>
+                    </select>
+                    <select
+                      className="redline-select"
+                      value={rule.redLineLevel ?? ""}
+                      onChange={(e) => onUpdateAgentRule(agent.id, rule.id, { redLineLevel: (e.target.value || undefined) as RuleItem["redLineLevel"] })}
+                    >
+                      <option value="">无级别</option>
+                      <option value="致命">致命</option>
+                      <option value="严重">严重</option>
+                      <option value="一般">一般</option>
                     </select>
                     {isShared ? (
                       <span className="rule-isolation-badge badge-shared">共享规则</span>
@@ -5437,6 +6083,12 @@ function AgentDetailPage({
                     </>
                   )}
 
+                  {rule.detectionSignal && (
+                    <div className="detection-signal">
+                      <span>检测信号：</span>{rule.detectionSignal}
+                    </div>
+                  )}
+
                   <div className="rule-card-actions">
                     {!isShared && (
                       <button
@@ -5460,6 +6112,51 @@ function AgentDetailPage({
               );
             })}
           </div>
+          {/* Rule Coverage Matrix */}
+          {agent.rules.length > 0 && agent.testCases.length > 0 && (
+            <div className="coverage-matrix-section">
+              <div className="section-title">
+                <span><BarChart2 size={16} />规则覆盖矩阵</span>
+              </div>
+              <div className="coverage-matrix">
+                <table className="coverage-table">
+                  <thead>
+                    <tr>
+                      <th>规则</th>
+                      {agent.testCases.slice(0, 8).map((tc) => (
+                        <th key={tc.id} className="case-col-header" title={tc.name}>
+                          <span className={`case-type-dot type-${tc.type ?? "正常"}`} />
+                        </th>
+                      ))}
+                      <th>覆盖</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {agent.rules.map((rule) => {
+                      const coveredCases = agent.testCases.filter((tc) => tc.ruleRefs?.includes(rule.id));
+                      return (
+                        <tr key={rule.id}>
+                          <td className="rule-label-cell">
+                            <span className={`rl-strip strip-${rule.redLineLevel ?? "none"}`} />
+                            <span className="rule-label-text" title={rule.title}>{rule.title.slice(0, 12)}{rule.title.length > 12 ? "…" : ""}</span>
+                          </td>
+                          {agent.testCases.slice(0, 8).map((tc) => (
+                            <td key={tc.id} className={`coverage-cell ${tc.ruleRefs?.includes(rule.id) ? "covered" : "uncovered"}`}>
+                              {tc.ruleRefs?.includes(rule.id) ? "✓" : ""}
+                            </td>
+                          ))}
+                          <td className={`coverage-count ${coveredCases.length === 0 ? "zero-coverage" : ""}`}>
+                            {coveredCases.length}/{agent.testCases.length}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="matrix-hint">仅显示前8个用例 · ✓ = 此用例引用了该规则</p>
+            </div>
+          )}
         </section>
 
         <div className={paneClass("detail-training", "detail-block-heading span-2")}>
@@ -5477,57 +6174,6 @@ function AgentDetailPage({
               训练运行控制台
             </span>
             <span className={`pill ${agent.trainedOnce ? "published" : "training"}`}>{agent.trainedOnce ? "已有训练版本" : "等待首轮训练"}</span>
-          </div>
-
-          {/* Context Document Index */}
-          <div className="context-docs-section">
-            <div className="section-title with-action">
-              <span>
-                <FileText size={16} />
-                上下文文档索引
-              </span>
-              <span className="context-docs-hint">每次 Agent 调用前自动读取</span>
-            </div>
-            <p className="context-docs-desc">上传本 Agent 专属文档，执行引擎在每次调用时优先检索这些文档，补充知识库未覆盖的专项内容。</p>
-            <div className="context-doc-list">
-              {(agent.contextDocs ?? []).map((doc) => (
-                <div className="context-doc-row" key={doc.id}>
-                  <span className={`context-doc-status status-${doc.status}`}>
-                    {doc.status === "indexing" ? "索引中…" : doc.status === "ready" ? "已就绪" : "错误"}
-                  </span>
-                  <span className="context-doc-name">{doc.name}</span>
-                  <small className="context-doc-time">{doc.uploadedAt}</small>
-                  <button className="ghost-button compact danger-button" type="button" onClick={() => removeContextDoc(doc.id)}>
-                    <X size={12} />
-                  </button>
-                </div>
-              ))}
-              {(agent.contextDocs ?? []).length === 0 && (
-                <p className="context-docs-empty">暂无专属文档。添加后每次调用自动检索。</p>
-              )}
-            </div>
-            <div className="context-doc-add-row">
-              <input
-                className="context-doc-input"
-                value={contextDocInput}
-                onChange={(e) => setContextDocInput(e.target.value)}
-                placeholder="文档名称（如：合同审查补充规范 v2.pdf）"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && contextDocInput.trim()) {
-                    addContextDoc(contextDocInput);
-                    setContextDocInput("");
-                  }
-                }}
-              />
-              <button
-                className="secondary-button compact"
-                type="button"
-                onClick={() => { if (contextDocInput.trim()) { addContextDoc(contextDocInput); setContextDocInput(""); } }}
-              >
-                <Plus size={14} />
-                上传文档
-              </button>
-            </div>
           </div>
 
           {agent.recentLessons && agent.recentLessons.length > 0 && (
@@ -5808,140 +6454,6 @@ function AgentDetailPage({
               纳入下一轮
             </button>
             {agent.feedbackSaved && <span className="feedback-saved">已进入优化样本池</span>}
-          </div>
-        </section>
-
-        <section className={paneClass("detail-training", "panel span-2")}>
-          <div className="section-title with-action">
-            <span>
-              <CheckCircle2 size={16} />
-              测试用例库
-            </span>
-            <button className="ghost-button compact" type="button" onClick={addTestCase}>
-              <Plus size={15} />
-              添加用例
-            </button>
-          </div>
-          <div className="case-grid">
-            {agent.testCases.map((testCase) => (
-              <div className="case-card editable" key={testCase.id}>
-                <div className="case-card-meta-row">
-                  <select
-                    value={testCase.status}
-                    onChange={(event) =>
-                      onUpdateAgent(agent.id, (item) => ({
-                        ...item,
-                        testCases: item.testCases.map((target) =>
-                          target.id === testCase.id ? { ...target, status: event.target.value as "通过" | "待验证" | "需优化" } : target,
-                        ),
-                      }))
-                    }
-                  >
-                    <option value="通过">通过</option>
-                    <option value="待验证">待验证</option>
-                    <option value="需优化">需优化</option>
-                  </select>
-                  <button
-                    className={`case-split-toggle ${testCase.split === "holdout" ? "holdout" : "train"}`}
-                    type="button"
-                    title="点击切换训练集/留出集"
-                    onClick={() =>
-                      onUpdateAgent(agent.id, (item) => ({
-                        ...item,
-                        testCases: item.testCases.map((t) =>
-                          t.id === testCase.id ? { ...t, split: t.split === "holdout" ? "train" : "holdout" } : t,
-                        ),
-                      }))
-                    }
-                  >
-                    {testCase.split === "holdout" ? "留出集" : "训练集"}
-                  </button>
-                </div>
-                <input
-                  value={testCase.name}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      testCases: item.testCases.map((target) => (target.id === testCase.id ? { ...target, name: event.target.value } : target)),
-                    }))
-                  }
-                />
-                <textarea
-                  value={testCase.input}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      testCases: item.testCases.map((target) => (target.id === testCase.id ? { ...target, input: event.target.value } : target)),
-                    }))
-                  }
-                  rows={2}
-                />
-                <textarea
-                  value={testCase.expected}
-                  onChange={(event) =>
-                    onUpdateAgent(agent.id, (item) => ({
-                      ...item,
-                      testCases: item.testCases.map((target) => (target.id === testCase.id ? { ...target, expected: event.target.value } : target)),
-                    }))
-                  }
-                  rows={2}
-                />
-                <div className="case-judgment-row">
-                  <span className="case-judgment-label">你的判断</span>
-                  <button
-                    className={`judgment-btn pass ${testCase.judgment === "pass" ? "active" : ""}`}
-                    type="button"
-                    aria-label="输出符合预期"
-                    onClick={() =>
-                      onUpdateAgent(agent.id, (item) => ({
-                        ...item,
-                        testCases: item.testCases.map((t) =>
-                          t.id === testCase.id ? { ...t, judgment: t.judgment === "pass" ? null : "pass" } : t,
-                        ),
-                      }))
-                    }
-                  >
-                    <ThumbsUp size={13} />
-                    符合预期
-                  </button>
-                  <button
-                    className={`judgment-btn fail ${testCase.judgment === "fail" ? "active" : ""}`}
-                    type="button"
-                    aria-label="输出有问题"
-                    onClick={() =>
-                      onUpdateAgent(agent.id, (item) => ({
-                        ...item,
-                        testCases: item.testCases.map((t) =>
-                          t.id === testCase.id ? { ...t, judgment: t.judgment === "fail" ? null : "fail" } : t,
-                        ),
-                      }))
-                    }
-                  >
-                    <ThumbsDown size={13} />
-                    有问题
-                  </button>
-                </div>
-                {testCase.judgment === "fail" && (
-                  <textarea
-                    className="judgment-note"
-                    value={testCase.judgmentNote ?? ""}
-                    placeholder="说说哪里有问题（可选，作为训练信号）"
-                    rows={2}
-                    onChange={(event) =>
-                      onUpdateAgent(agent.id, (item) => ({
-                        ...item,
-                        testCases: item.testCases.map((t) =>
-                          t.id === testCase.id ? { ...t, judgmentNote: event.target.value } : t,
-                        ),
-                      }))
-                    }
-                  />
-                )}
-                <button className="ghost-button compact danger-button" type="button" onClick={() => deleteTestCase(testCase.id)}>
-                  删除用例
-                </button>
-              </div>
-            ))}
           </div>
         </section>
 

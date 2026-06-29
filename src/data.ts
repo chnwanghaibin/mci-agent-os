@@ -248,9 +248,9 @@ const mainAgents: Agent[] = [
     ],
     knowledgeIds: ["doc-contract-standard", "doc-cashflow-asset", "doc-compliance-check"],
     rules: [
-      { id: "r1", sourceRuleId: "rule-contract-revenue", title: "收益分配口径必须明确", description: "合同需说明门店经营收益的计算口径、扣除项和分配周期。", priority: "高", enabled: true },
-      { id: "r2", sourceRuleId: "rule-contract-termination", title: "提前终止需设复核条件", description: "提前终止必须包含触发条件、通知机制和投资者保护安排。", priority: "高", enabled: true },
-      { id: "r3", sourceRuleId: "rule-contract-data-auth", title: "数据授权与披露一致", description: "门店数据授权范围需与披露材料和系统采集口径一致。", priority: "中", enabled: true },
+      { id: "r1", sourceRuleId: "rule-contract-revenue", title: "收益分配口径必须明确", description: "合同需说明门店经营收益的计算口径、扣除项和分配周期。", priority: "高", enabled: true, redLineLevel: "致命" as const, detectionSignal: "金额字段计算结果与输入数据偏差>1%时告警", certainty: "confirmed" as const },
+      { id: "r2", sourceRuleId: "rule-contract-termination", title: "提前终止需设复核条件", description: "提前终止必须包含触发条件、通知机制和投资者保护安排。", priority: "高", enabled: true, redLineLevel: "严重" as const, detectionSignal: "下游节点收到null输出时触发", certainty: "confirmed" as const },
+      { id: "r3", sourceRuleId: "rule-contract-data-auth", title: "数据授权与披露一致", description: "门店数据授权范围需与披露材料和系统采集口径一致。", priority: "中", enabled: true, redLineLevel: "严重" as const, detectionSignal: "连续3次输出格式校验失败时暂停", certainty: "assumed" as const },
     ],
     beforeReport: {
       title: "训练前输出",
@@ -292,6 +292,9 @@ const mainAgents: Agent[] = [
         status: "通过",
         judgment: "pass" as const,
         split: "train" as const,
+        type: "正常" as const,
+        difficulty: "简单" as const,
+        ruleRefs: ["r1"],
       },
       {
         id: "tc-contract-2",
@@ -301,6 +304,9 @@ const mainAgents: Agent[] = [
         status: "通过",
         judgment: "pass" as const,
         split: "holdout" as const,
+        type: "正常" as const,
+        difficulty: "简单" as const,
+        ruleRefs: ["r1"],
       },
       {
         id: "tc-contract-3",
@@ -311,13 +317,18 @@ const mainAgents: Agent[] = [
         judgment: "fail" as const,
         judgmentNote: "Agent 没识别出口径不一致，只提示了泛化风险，缺少具体修订建议。",
         split: "train" as const,
+        type: "对抗" as const,
+        difficulty: "困难" as const,
+        ruleRefs: ["r1", "r2", "r3"],
       },
     ],
     instructionSegments: [
-      { id: "seg-c-role", label: "角色" as const, content: "你是滴灌通合同审查 Agent。" },
-      { id: "seg-c-task", label: "任务" as const, content: "请围绕门店现金流合约、收益分配、披露义务、提前终止、争议解决和投资者保护条款进行审查。" },
-      { id: "seg-c-constraint", label: "约束" as const, content: "遇到高风险或证据不足时，必须建议人工复核。不得生成未经验证的法律结论。" },
-      { id: "seg-c-output", label: "输出格式" as const, content: "输出必须包含风险等级、命中规则、修改建议和最终结论。" },
+      { id: "seg-c-role", label: "角色" as const, content: "你是滴灌通合同审查 Agent。", certainty: "confirmed" as const },
+      { id: "seg-c-task", label: "任务" as const, content: "请围绕门店现金流合约、收益分配、披露义务、提前终止、争议解决和投资者保护条款进行审查。", certainty: "confirmed" as const },
+      { id: "seg-c-constraint", label: "约束" as const, content: "遇到高风险或证据不足时，必须建议人工复核。不得生成未经验证的法律结论。", certainty: "confirmed" as const },
+      { id: "seg-c-output", label: "输出格式" as const, content: "输出必须包含风险等级、命中规则、修改建议和最终结论。", certainty: "confirmed" as const },
+      { id: "seg-exception", label: "异常处理" as const, content: "当输入字段缺失或格式错误时，返回标准错误结构 {code, message, field}，不尝试推测补全。超过重试阈值时自动上报人工复核队列。", certainty: "assumed" as const },
+      { id: "seg-goal", label: "处理目标" as const, content: "能正确处理90%以上的标准合同条款提取请求，对违规条款的识别准确率≥85%，误报率<5%。", certainty: "confirmed" as const },
     ],
     fewShots: [
       {
@@ -390,8 +401,8 @@ const mainAgents: Agent[] = [
     ],
     knowledgeIds: ["doc-cop-ticket", "doc-settlement"],
     rules: [
-      { id: "sr1", sourceRuleId: "rule-ticket-settlement", title: "影响结算即提升优先级", description: "若工单影响结算或账本落账，优先级至少为 P1。", priority: "高", enabled: true },
-      { id: "sr2", sourceRuleId: "rule-ticket-batch-store", title: "门店范围超过 10 家需升级", description: "涉及多门店批量数据异常时必须建议升级处理。", priority: "中", enabled: true },
+      { id: "sr1", sourceRuleId: "rule-ticket-settlement", title: "影响结算即提升优先级", description: "若工单影响结算或账本落账，优先级至少为 P1。", priority: "高", enabled: true, redLineLevel: "一般" as const, detectionSignal: "日志中记录字段缺失次数", certainty: "pending" as const },
+      { id: "sr2", sourceRuleId: "rule-ticket-batch-store", title: "门店范围超过 10 家需升级", description: "涉及多门店批量数据异常时必须建议升级处理。", priority: "中", enabled: true, redLineLevel: "一般" as const, certainty: "confirmed" as const },
     ],
     beforeReport: {
       title: "训练前输出",
@@ -433,6 +444,9 @@ const mainAgents: Agent[] = [
         status: "通过",
         judgment: "pass" as const,
         split: "train" as const,
+        type: "正常" as const,
+        difficulty: "简单" as const,
+        ruleRefs: ["sr1"],
       },
       {
         id: "tc-system-2",
@@ -442,6 +456,9 @@ const mainAgents: Agent[] = [
         status: "通过",
         judgment: "pass" as const,
         split: "holdout" as const,
+        type: "正常" as const,
+        difficulty: "简单" as const,
+        ruleRefs: ["sr1"],
       },
       {
         id: "tc-system-3",
@@ -451,13 +468,18 @@ const mainAgents: Agent[] = [
         status: "待验证",
         judgment: null,
         split: "train" as const,
+        type: "异常" as const,
+        difficulty: "中等" as const,
+        ruleRefs: ["sr1", "sr2"],
       },
     ],
     instructionSegments: [
-      { id: "seg-s-role", label: "角色" as const, content: "你是系统工单分诊 Agent。" },
-      { id: "seg-s-task", label: "任务" as const, content: "请读取工单描述，判断问题类型、优先级、责任团队和下一步动作。优先考虑现金流数据同步、COP 操作阻塞、结算影响和门店范围。" },
-      { id: "seg-s-constraint", label: "约束" as const, content: "P0/P1 工单必须提示人工确认。不得直接承诺修复时间。责任团队必须来自已配置团队。" },
-      { id: "seg-s-output", label: "输出格式" as const, content: "输出分类、优先级（P0-P3）、责任团队和处理摘要。" },
+      { id: "seg-s-role", label: "角色" as const, content: "你是系统工单分诊 Agent。", certainty: "confirmed" as const },
+      { id: "seg-s-task", label: "任务" as const, content: "请读取工单描述，判断问题类型、优先级、责任团队和下一步动作。优先考虑现金流数据同步、COP 操作阻塞、结算影响和门店范围。", certainty: "confirmed" as const },
+      { id: "seg-s-constraint", label: "约束" as const, content: "P0/P1 工单必须提示人工确认。不得直接承诺修复时间。责任团队必须来自已配置团队。", certainty: "confirmed" as const },
+      { id: "seg-s-output", label: "输出格式" as const, content: "输出分类、优先级（P0-P3）、责任团队和处理摘要。", certainty: "confirmed" as const },
+      { id: "seg-s-exception", label: "异常处理" as const, content: "当工单描述缺少关键字段（门店数量、截图、业务时间点）时，返回补充请求结构，不直接分诊。", certainty: "assumed" as const },
+      { id: "seg-s-goal", label: "处理目标" as const, content: "P0/P1 工单识别准确率≥95%，错误路由率<3%，关键字段缺失场景正确拦截率≥90%。", certainty: "confirmed" as const },
     ],
     fewShots: [
       {

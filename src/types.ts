@@ -1,5 +1,5 @@
 export type AgentStatus = "draft" | "trained" | "published";
-export type ViewName = "matrix" | "agents" | "knowledge" | "rules" | "evaluation" | "api" | "detail" | "skills";
+export type ViewName = "matrix" | "matrix-b" | "agents" | "knowledge" | "rules" | "evaluation" | "api" | "detail" | "skills";
 
 export interface FlowItem {
   id: string;
@@ -24,6 +24,9 @@ export interface RuleItem {
   priority: "高" | "中" | "低";
   enabled: boolean;
   isolationType?: "binding" | "create" | "content";
+  redLineLevel?: "致命" | "严重" | "一般";           // NEW
+  detectionSignal?: string;                          // NEW
+  certainty?: "confirmed" | "assumed" | "pending";   // NEW
 }
 
 export interface RuleLibraryItem {
@@ -142,6 +145,9 @@ export interface TestCase {
   judgment?: "pass" | "fail" | null;
   judgmentNote?: string;
   split?: "train" | "holdout";
+  type?: "正常" | "异常" | "边界" | "对抗";        // NEW
+  difficulty?: "简单" | "中等" | "困难";             // NEW
+  ruleRefs?: string[];                               // NEW — RuleItem.id references
 }
 
 export interface EvalRun {
@@ -176,8 +182,9 @@ export interface TrainingReport {
 
 export interface InstructionSegment {
   id: string;
-  label: "角色" | "任务" | "约束" | "输出格式";
+  label: "角色" | "任务" | "约束" | "输出格式" | "异常处理" | "处理目标";  // EXPANDED
   content: string;
+  certainty?: "confirmed" | "assumed" | "pending";   // NEW
 }
 
 export interface FewShotExample {
