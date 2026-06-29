@@ -31,7 +31,7 @@ export const cellKey = (workId: string, functionId: string) => `${workId}:${func
 const docs: KnowledgeDoc[] = [
   {
     id: "doc-contract-standard",
-    title: "合同审查标准 v1.4",
+    title: "合同知识库",
     category: "合同",
     tags: ["Contract Registrar", "风险条款", "收益分配"],
     updatedAt: "2026-06-15",
@@ -40,7 +40,7 @@ const docs: KnowledgeDoc[] = [
   },
   {
     id: "doc-cashflow-asset",
-    title: "现金流资产标准化规则",
+    title: "现金流资产标准化规则知识库",
     category: "资产",
     tags: ["RWC", "PCF Reporting", "真实经济"],
     updatedAt: "2026-06-12",
@@ -49,7 +49,7 @@ const docs: KnowledgeDoc[] = [
   },
   {
     id: "doc-cop-ticket",
-    title: "COP 工单分诊手册",
+    title: "COP 工单知识库",
     category: "系统",
     tags: ["COP", "System Flow", "工单"],
     updatedAt: "2026-06-10",
@@ -58,7 +58,7 @@ const docs: KnowledgeDoc[] = [
   },
   {
     id: "doc-compliance-check",
-    title: "披露与合规检查清单",
+    title: "披露与合规知识库",
     category: "合规",
     tags: ["Disclosure Flow", "Compliance Flow", "Primary Issue"],
     updatedAt: "2026-06-08",
@@ -67,7 +67,7 @@ const docs: KnowledgeDoc[] = [
   },
   {
     id: "doc-settlement",
-    title: "结算异常处理标准",
+    title: "结算异常处理知识库",
     category: "结算",
     tags: ["Settlement", "Ledger Flow", "异常处理"],
     updatedAt: "2026-06-04",
@@ -428,7 +428,7 @@ const mainAgents: Agent[] = [
     },
     trace: baseTrace,
     timeline: [
-      { id: "st1", title: "完成训练", description: "使用 COP 工单分诊手册完成第二轮优化。", time: "昨日 18:10" },
+      { id: "st1", title: "完成训练", description: "使用 COP 工单知识库完成第二轮优化。", time: "昨日 18:10" },
       { id: "st2", title: "发布到矩阵", description: "已发布至 System Flow x COP。", time: "昨日 18:22" },
     ],
     apiCalls: [
