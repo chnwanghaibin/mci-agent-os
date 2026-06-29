@@ -1757,7 +1757,7 @@ export default function App() {
           <div className="brand-mark">MC</div>
           <div>
             <div className="brand-title">滴灌通Agent平台</div>
-            <div className="brand-subtitle">Work / Functional Flow</div>
+            <div className="brand-subtitle">Work Flow / Stage</div>
           </div>
         </div>
 
@@ -1799,6 +1799,7 @@ export default function App() {
           <MatrixPageB
             agents={state.agents}
             onOpenAgent={openAgent}
+            onNewAgent={() => { setView("agents"); setCreateOpen(true); }}
           />
         )}
 
@@ -2754,7 +2755,7 @@ function MatrixPage({
     <section className="page page-matrix">
       <div className="page-sticky-zone">
         <PageHeader
-          eyebrow="Work Flow x Functional Flow"
+          eyebrow="Work Flow x Stage"
           title="矩阵看板"
         />
 
@@ -2800,9 +2801,9 @@ function MatrixPage({
 
       <div className="matrix-body">
         <div className="matrix-wrap">
-          <div className={`matrix-table ${heatmap ? "heatmap" : ""}`} role="grid" aria-label="Work Flow x Functional Flow 矩阵">
+          <div className={`matrix-table ${heatmap ? "heatmap" : ""}`} role="grid" aria-label="Work Flow x Stage 矩阵">
             <div className="matrix-corner">
-              <span className="corner-functional">Functional Flow</span>
+              <span className="corner-functional">Stage</span>
               <span className="corner-work">Work Flow</span>
             </div>
             {functionalFlows.map((flow) => (
@@ -3003,12 +3004,14 @@ function NodePanelB({
   agents,
   onClose,
   onOpenAgent,
+  onNewAgent,
   panelRef,
 }: {
   cellKeyValue: string;
   agents: Agent[];
   onClose: () => void;
   onOpenAgent: (agentId: string) => void;
+  onNewAgent: () => void;
   panelRef: React.RefObject<HTMLElement>;
 }) {
   const publishedCount = agents.filter((a) => a.status === "published").length;
@@ -3071,7 +3074,13 @@ function NodePanelB({
       {/* agent list */}
       <div className="npb-list-header">
         <span>Agent 列表</span>
-        <span className="npb-list-count">{agents.length} 个</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="npb-list-count">{agents.length} 个</span>
+          <button className="npb-new-agent-btn" type="button" onClick={onNewAgent}>
+            <Plus size={12} />
+            新建 Agent
+          </button>
+        </div>
       </div>
 
       <div className="npb-agent-list">
@@ -3118,15 +3127,36 @@ function NodePanelB({
 function MatrixPageB({
   agents,
   onOpenAgent,
+  onNewAgent,
 }: {
   agents: Agent[];
   onOpenAgent: (agentId: string) => void;
+  onNewAgent: () => void;
 }) {
   const [selectedCellKey, setSelectedCellKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "published" | "trained" | "draft" | "empty">("all");
   const [workFilter, setWorkFilter] = useState("all");
   const panelRef = useRef<HTMLElement>(null);
+
+  // hover tooltip
+  type TooltipState = { key: string; agents: Agent[]; x: number; y: number };
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const tooltipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showTooltip = (e: React.MouseEvent<HTMLButtonElement>, key: string, cellAgents: Agent[]) => {
+    if (cellAgents.length === 0) return;
+    if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
+    const rect = e.currentTarget.getBoundingClientRect();
+    tooltipTimer.current = setTimeout(() => {
+      setTooltip({ key, agents: cellAgents, x: rect.left + rect.width / 2, y: rect.top });
+    }, 180);
+  };
+
+  const hideTooltip = () => {
+    if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
+    tooltipTimer.current = setTimeout(() => setTooltip(null), 80);
+  };
 
   const agentsByCell = useMemo(() => {
     const map: Record<string, Agent[]> = {};
@@ -3180,7 +3210,7 @@ function MatrixPageB({
     <section className="page page-matrix">
       <div className="page-sticky-zone">
         <PageHeader
-          eyebrow="Work Flow x Functional Flow · 多 Agent 节点视图"
+          eyebrow="Work Flow x Stage · 多 Agent 节点视图"
           title="矩阵看板 B"
         />
 
@@ -3229,7 +3259,7 @@ function MatrixPageB({
         <div className="matrix-wrap">
           <div className="matrix-table matrix-table-b" role="grid" aria-label="矩阵看板B">
             <div className="matrix-corner">
-              <span className="corner-functional">Functional Flow</span>
+              <span className="corner-functional">Stage</span>
               <span className="corner-work">Work Flow</span>
             </div>
             {functionalFlows.map((flow) => (
@@ -3251,6 +3281,8 @@ function MatrixPageB({
                       key={key}
                       type="button"
                       onClick={() => setSelectedCellKey(selectedCellKey === key ? null : key)}
+                      onMouseEnter={(e) => showTooltip(e, key, cellAgents)}
+                      onMouseLeave={hideTooltip}
                       aria-label={`${work.label} × ${func.label}，共 ${total} 个 Agent`}
                     >
                       {bestStatus === "empty" ? (
@@ -3295,9 +3327,39 @@ function MatrixPageB({
             agents={selectedAgents}
             onClose={() => setSelectedCellKey(null)}
             onOpenAgent={onOpenAgent}
+            onNewAgent={onNewAgent}
             panelRef={panelRef}
           />
         )}
+
+        {tooltip && (() => {
+          const pub = tooltip.agents.filter((a) => a.status === "published").length;
+          const trained = tooltip.agents.filter((a) => a.status === "trained").length;
+          const draft = tooltip.agents.filter((a) => a.status === "draft").length;
+          const total = tooltip.agents.length;
+          const readyPct = Math.round((pub / total) * 100);
+          return (
+            <div
+              className="b-hover-card"
+              style={{ left: tooltip.x, top: tooltip.y }}
+              onMouseEnter={() => { if (tooltipTimer.current) clearTimeout(tooltipTimer.current); }}
+              onMouseLeave={hideTooltip}
+            >
+              <div className="bhc-header">
+                <span className="bhc-total">{total} 个 Agent</span>
+                <span className="bhc-ready-pct">{readyPct}% 就绪</span>
+              </div>
+              <div className="bhc-bar-track">
+                <div className="bhc-bar-fill" style={{ width: `${readyPct}%` }} />
+              </div>
+              <div className="bhc-stats">
+                <span className="bhc-stat bhc-stat-pub">已发布 {pub}</span>
+                <span className="bhc-stat bhc-stat-trained">已训练 {trained}</span>
+                <span className="bhc-stat bhc-stat-draft">待训练 {draft}</span>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </section>
   );
@@ -4715,7 +4777,7 @@ function AgentDetailPage({
   const detailSections = [
     { id: "detail-overview", label: "概览", summary: `${readinessScore} 分预检` },
     { id: "detail-prompt", label: "白盒配置单元", summary: `${agent.instructionSegments?.length ?? 0} 段 / ${agent.fewShots?.length ?? 0} 示范` },
-    { id: "detail-guardrails", label: "安全边界", summary: `${agent.guardrails.length} 条边界` },
+    { id: "detail-guardrails", label: "安全边界与案例库", summary: `${agent.guardrails.length} 条边界` },
     { id: "detail-workflow", label: "工作流管理", summary: `${agent.workflow.filter((step) => step.enabled).length} 个步骤` },
     { id: "detail-assets", label: "知识与规则", summary: `${agent.knowledgeIds.length} 文档 / ${enabledRules} 规则` },
     { id: "detail-training", label: "训练评估", summary: `${passedCases}/${agent.testCases.length} 用例` },
@@ -5404,8 +5466,8 @@ function AgentDetailPage({
         <div className={paneClass("detail-guardrails", "detail-block-heading span-2")}>
           <span>03</span>
           <div>
-            <strong>安全边界</strong>
-            <p>明确 Agent 的安全边界、人工复核触发条件和禁止事项。</p>
+            <strong>安全边界与案例库</strong>
+            <p>明确 Agent 的安全边界、人工复核触发条件和禁止事项，并管理测试案例。</p>
           </div>
         </div>
 
@@ -5487,7 +5549,7 @@ function AgentDetailPage({
           <div className="section-title with-action">
             <span>
               <CheckCircle2 size={16} />
-              测试案例库
+              案例库
             </span>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <label className="secondary-button compact" style={{ cursor: "pointer" }}>
@@ -6548,7 +6610,7 @@ function AgentDetailPage({
               </select>
             </label>
             <label>
-              <span>Functional Flow</span>
+              <span>Stage</span>
               <select value={publishFunc} onChange={(event) => setPublishFunc(event.target.value)}>
                 {functionalFlows.map((item) => (
                   <option key={item.id} value={item.id}>

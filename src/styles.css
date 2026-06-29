@@ -4323,6 +4323,29 @@ textarea:focus {
   padding: 5px 3px;
   background: var(--surface);
   transition: background 0.14s ease, box-shadow 0.14s ease;
+  container-type: inline-size;
+}
+
+/* scale icon/fraction/dots with cell container width */
+@container (max-width: 54px) {
+  .b-main-icon svg { width: 12px; height: 12px; }
+  .b-frac-ready  { font-size: 9px; }
+  .b-frac-sep    { font-size: 8px; }
+  .b-frac-total  { font-size: 8px; }
+  .b-dot         { width: 4px; height: 4px; }
+  .b-dot-more    { font-size: 7px; }
+}
+@container (min-width: 55px) and (max-width: 79px) {
+  .b-main-icon svg { width: 16px; height: 16px; }
+  .b-frac-ready  { font-size: 10px; }
+  .b-frac-sep    { font-size: 9px; }
+  .b-frac-total  { font-size: 9px; }
+}
+@container (min-width: 80px) {
+  .b-main-icon svg { width: 20px; height: 20px; }
+  .b-frac-ready  { font-size: 12px; }
+  .b-frac-total  { font-size: 11px; }
+  .b-dot         { width: 6px; height: 6px; }
 }
 
 /* empty cells — very subtle */
@@ -4443,6 +4466,70 @@ textarea:focus {
   font-weight: 300;
   line-height: 1;
 }
+
+/* hover tooltip card */
+.b-hover-card {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 10px));
+  z-index: 9999;
+  background: var(--ink);
+  color: #fff;
+  border-radius: 10px;
+  padding: 10px 13px;
+  min-width: 160px;
+  box-shadow: 0 4px 20px rgba(10, 22, 38, 0.22);
+  pointer-events: auto;
+}
+
+.bhc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 7px;
+}
+
+.bhc-total {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.bhc-ready-pct {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6effd7;
+}
+
+.bhc-bar-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.2);
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.bhc-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: #00ce9e;
+  transition: width 0.3s ease;
+}
+
+.bhc-stats {
+  display: flex;
+  gap: 8px;
+}
+
+.bhc-stat {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.12);
+}
+
+.bhc-stat-pub    { color: #6effd7; }
+.bhc-stat-trained { color: #fde68a; }
+.bhc-stat-draft   { color: #cbd5e1; }
 
 /* ── NodePanelB ─────────────────────────────────────────────────────────── */
 
@@ -4586,6 +4673,29 @@ textarea:focus {
   color: var(--muted);
   text-transform: none;
   letter-spacing: 0;
+}
+
+.npb-new-agent-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--green-dark);
+  background: var(--surface-green);
+  border: 1px solid rgba(0, 206, 158, 0.35);
+  border-radius: 5px;
+  padding: 3px 9px;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  transition: all 0.13s ease;
+}
+
+.npb-new-agent-btn:hover {
+  background: #c3fce9;
+  border-color: rgba(0, 206, 158, 0.6);
+  box-shadow: 0 1px 4px rgba(0, 206, 158, 0.2);
 }
 
 /* agent list */
