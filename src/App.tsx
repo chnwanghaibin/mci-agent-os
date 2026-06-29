@@ -510,6 +510,7 @@ function loadState(): AppState {
 
 function migrateState(partial: Partial<AppState>): AppState {
   const defaultAgentsById = Object.fromEntries(defaultState.agents.map((agent) => [agent.id, agent])) as Record<string, Agent>;
+  const defaultDocsById = Object.fromEntries(defaultState.docs.map((doc) => [doc.id, doc]));
   const mergedRules = partial.rules ?? defaultState.rules;
   return {
     agents: (partial.agents ?? defaultState.agents).map((agent) => ({
@@ -536,7 +537,11 @@ function migrateState(partial: Partial<AppState>): AppState {
       retrievalConfig: agent.retrievalConfig ?? defaultAgentsById[agent.id]?.retrievalConfig,
       rubric: agent.rubric ?? defaultAgentsById[agent.id]?.rubric,
     })),
-    docs: partial.docs ?? defaultState.docs,
+    docs: (partial.docs ?? defaultState.docs).map((doc) => {
+      const def = defaultDocsById[doc.id];
+      if (!def) return doc;
+      return { ...def, linkedAgents: doc.linkedAgents ?? def.linkedAgents };
+    }),
     rules: mergedRules,
     evalRuns: partial.evalRuns ?? defaultState.evalRuns,
     apiKeys: partial.apiKeys ?? defaultState.apiKeys,
