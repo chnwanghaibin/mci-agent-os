@@ -662,6 +662,31 @@ button:disabled {
   font-size: 11px;
 }
 
+.cell-multi-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--green-dark);
+  background: var(--surface-green);
+  border: 1px solid rgba(0, 206, 158, 0.3);
+  border-radius: 10px;
+  padding: 0 5px;
+  line-height: 16px;
+  vertical-align: middle;
+}
+
+.cell-dot-row {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
 /* ── Matrix body: board + drawer side-by-side ───────────────────────────── */
 .matrix-body {
   display: flex;
@@ -4481,6 +4506,17 @@ textarea:focus {
   pointer-events: auto;
 }
 
+.bhc-cell-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
 .bhc-header {
   display: flex;
   justify-content: space-between;
@@ -4696,6 +4732,56 @@ textarea:focus {
   background: #c3fce9;
   border-color: rgba(0, 206, 158, 0.6);
   box-shadow: 0 1px 4px rgba(0, 206, 158, 0.2);
+}
+
+.npb-link-agent-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 9px;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  transition: all 0.13s ease;
+}
+
+.npb-link-agent-btn:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+.npb-link-picker {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.npb-link-select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.npb-link-empty {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  margin: 0;
+  padding: 4px 0;
 }
 
 /* agent list */

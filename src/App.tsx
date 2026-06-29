@@ -12,6 +12,7 @@ import {
   Code2,
   Copy,
   Database,
+  Link2,
   Edit3,
   FileText,
   Filter,
@@ -1214,13 +1215,6 @@ export default function App() {
   };
 
   const placeAgent = (agentId: string, targetCellKey: string, navigateAfterPublish = false) => {
-    const targetAgent = agentsById[agentId];
-    const occupant = state.agents.find((agent) => agent.matrixCellKey === targetCellKey && agent.id !== agentId);
-    if (occupant) {
-      const confirmed = window.confirm(`${targetCellKey.replace(":", " x ")} 已有 ${occupant.name}。确认替换后，原 Agent 将变为已训练但未发布。`);
-      if (!confirmed) return;
-    }
-
     setState((current) => ({
       ...current,
       agents: current.agents.map((agent) => {
@@ -1243,22 +1237,6 @@ export default function App() {
             ],
           };
         }
-        if (agent.matrixCellKey === targetCellKey && agent.id !== agentId) {
-          return {
-            ...agent,
-            status: "trained",
-            matrixCellKey: undefined,
-            timeline: [
-              {
-                id: `replace-${Date.now()}`,
-                title: "节点被替换",
-                description: `${targetAgent?.name ?? "新 Agent"} 已成为该节点主 Agent。`,
-                time: nowLabel(),
-              },
-              ...agent.timeline,
-            ],
-          };
-        }
         return agent;
       }),
     }));
@@ -1267,6 +1245,26 @@ export default function App() {
     setSelectedCellKey(null);
     if (navigateAfterPublish) setView("matrix");
     notify("Agent 已发布到矩阵节点");
+  };
+
+  const linkAgent = (agentId: string, targetCellKey: string) => {
+    setState((current) => ({
+      ...current,
+      agents: current.agents.map((agent) =>
+        agent.id === agentId ? { ...agent, matrixCellKey: targetCellKey } : agent,
+      ),
+    }));
+    notify("Agent 已关联到节点");
+  };
+
+  const unlinkAgent = (agentId: string) => {
+    setState((current) => ({
+      ...current,
+      agents: current.agents.map((agent) =>
+        agent.id === agentId ? { ...agent, matrixCellKey: undefined } : agent,
+      ),
+    }));
+    notify("Agent 已从节点移除");
   };
 
   const createAgent = (name: string, purpose: string, type: string, inputSchema: string[], outputSchema: string[]) => {
@@ -1800,6 +1798,7 @@ export default function App() {
             agents={state.agents}
             onOpenAgent={openAgent}
             onNewAgent={() => { setView("agents"); setCreateOpen(true); }}
+            onLinkAgent={linkAgent}
           />
         )}
 
@@ -2678,6 +2677,12 @@ function getCellState(agent?: Agent) {
   return { label: "待训练", className: "training" };
 }
 
+function getCellStateA(cellAgents: Agent[]) {
+  if (cellAgents.length === 0) return { label: "待规划", className: "planned" };
+  if (cellAgents.some((a) => a.status === "published")) return { label: "已发布", className: "published" };
+  return { label: "待训练", className: "training" };
+}
+
 function MatrixPage({
   agents,
   apiKeys,
@@ -2702,9 +2707,10 @@ function MatrixPage({
   const [workFilter, setWorkFilter] = useState("all");
   const [heatmap, setHeatmap] = useState(false);
 
-  const agentByCell = useMemo(() => {
-    const entries = agents.filter((agent) => agent.matrixCellKey).map((agent) => [agent.matrixCellKey!, agent]);
-    return Object.fromEntries(entries) as Record<string, Agent>;
+  const agentsByCell = useMemo(() => {
+    const map: Record<string, Agent[]> = {};
+    agents.forEach((a) => { if (a.matrixCellKey) (map[a.matrixCellKey] ??= []).push(a); });
+    return map;
   }, [agents]);
 
   const counts = useMemo(() => {
@@ -2724,7 +2730,7 @@ function MatrixPage({
     };
   }, [agents, apiKeys]);
 
-  const selectedAgent = selectedCellKey ? agentByCell[selectedCellKey] : undefined;
+  const selectedCellAgents = selectedCellKey ? (agentsByCell[selectedCellKey] ?? []) : [];
 
   const panelRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -2743,10 +2749,10 @@ function MatrixPage({
   }, [selectedCellKey, onCloseCell]);
 
   const visibleWorkFlows = workFlows.filter((work) => workFilter === "all" || work.id === workFilter);
-  const matchesCell = (key: string, agent?: Agent) => {
-    const state = getCellState(agent).className;
-    const hitStatus = statusFilter === "all" || statusFilter === state;
-    const text = `${describeCell(key)} ${agent?.name ?? "待规划"} ${agent?.type ?? ""}`.toLowerCase();
+  const matchesCell = (key: string, cellAgents: Agent[]) => {
+    const st = getCellStateA(cellAgents).className;
+    const hitStatus = statusFilter === "all" || statusFilter === st;
+    const text = `${describeCell(key)} ${cellAgents.map((a) => `${a.name} ${a.type}`).join(" ")}`.toLowerCase();
     const hitQuery = text.includes(query.toLowerCase());
     return hitStatus && hitQuery;
   };
@@ -2816,22 +2822,41 @@ function MatrixPage({
                 <div className="matrix-side">{work.label}</div>
                 {functionalFlows.map((func) => {
                   const key = cellKey(work.id, func.id);
-                  const agent = agentByCell[key];
-                  const state = getCellState(agent);
-                  const visible = matchesCell(key, agent);
+                  const cellAgents = agentsByCell[key] ?? [];
+                  const primary = cellAgents[0];
+                  const st = getCellStateA(cellAgents);
+                  const visible = matchesCell(key, cellAgents);
                   return (
                     <button
-                      className={`matrix-cell ${state.className} ${highlightedCell === key ? "highlight" : ""} ${visible ? "" : "dimmed"}`}
+                      className={`matrix-cell ${st.className} ${highlightedCell === key ? "highlight" : ""} ${visible ? "" : "dimmed"}`}
                       key={key}
                       type="button"
                       onClick={() => onOpenCell(key)}
-                      onDoubleClick={() => agent && onOpenAgent(agent.id)}
-                      aria-label={`${work.label} ${func.label} ${agent?.name ?? "待规划"}`}
+                      onDoubleClick={() => primary && onOpenAgent(primary.id)}
+                      aria-label={`${work.label} ${func.label} ${cellAgents.length > 0 ? cellAgents.map((a) => a.name).join(", ") : "待规划"}`}
                     >
-                      <span className={`status-dot ${state.className}`} />
-                      <span className="cell-status">{state.label}</span>
-                      <span className="cell-agent">{agent?.name ?? "待规划"}</span>
-                      {agent && <span className="cell-score">{agent.version} / {agent.score}</span>}
+                      <span className={`status-dot ${st.className}`} />
+                      <span className="cell-status">{st.label}</span>
+                      {cellAgents.length === 0 ? (
+                        <span className="cell-agent">待规划</span>
+                      ) : (
+                        <>
+                          <span className="cell-agent">
+                            {primary.name}
+                            {cellAgents.length > 1 && <span className="cell-multi-badge">+{cellAgents.length - 1}</span>}
+                          </span>
+                          {cellAgents.length === 1 ? (
+                            <span className="cell-score">{primary.version} / {primary.score}</span>
+                          ) : (
+                            <div className="cell-dot-row">
+                              {cellAgents.slice(0, 5).map((a) => (
+                                <span key={a.id} className={`b-dot bdot-${STATUS_CLASS_B[a.status]}`} />
+                              ))}
+                              {cellAgents.length > 5 && <span className="b-dot-more">+{cellAgents.length - 5}</span>}
+                            </div>
+                          )}
+                        </>
+                      )}
                     </button>
                   );
                 })}
@@ -2843,7 +2868,7 @@ function MatrixPage({
         {selectedCellKey && (
           <NodePanel
             cellKeyValue={selectedCellKey}
-            agent={selectedAgent}
+            cellAgents={selectedCellAgents}
             agents={agents}
             onClose={onCloseCell}
             onOpenAgent={onOpenAgent}
@@ -2858,7 +2883,7 @@ function MatrixPage({
 
 function NodePanel({
   cellKeyValue,
-  agent,
+  cellAgents,
   agents,
   onClose,
   onOpenAgent,
@@ -2866,23 +2891,26 @@ function NodePanel({
   panelRef,
 }: {
   cellKeyValue: string;
-  agent?: Agent;
+  cellAgents: Agent[];
   agents: Agent[];
   onClose: () => void;
   onOpenAgent: (agentId: string) => void;
   onPlaceAgent: (agentId: string, targetCellKey: string) => void;
   panelRef: React.RefObject<HTMLElement>;
 }) {
-  const [selectedId, setSelectedId] = useState(agent?.id ?? agents[0]?.id ?? "");
-  const [showPlacement, setShowPlacement] = useState(!agent);
+  const [selectedId, setSelectedId] = useState(agents[0]?.id ?? "");
+  const [showPlacement, setShowPlacement] = useState(cellAgents.length === 0);
 
   useEffect(() => {
-    setSelectedId(agent?.id ?? agents[0]?.id ?? "");
-    setShowPlacement(!agent);
-  }, [agent?.id, agents, agent]);
+    setSelectedId(agents[0]?.id ?? "");
+    setShowPlacement(cellAgents.length === 0);
+  }, [cellKeyValue, cellAgents.length, agents]);
 
-  const cellState = getCellState(agent);
+  const cellSt = getCellStateA(cellAgents);
+  const agent = cellAgents.length === 1 ? cellAgents[0] : undefined;
   const scoreColor = (agent?.score ?? 0) >= 85 ? "green" : (agent?.score ?? 0) >= 70 ? "amber" : "red";
+  const pubCount = cellAgents.filter((a) => a.status === "published").length;
+  const trainedCount = cellAgents.filter((a) => a.status === "trained").length;
 
   return (
     <aside className="node-panel" ref={panelRef as React.RefObject<HTMLElement>} aria-label="节点训练概览">
@@ -2890,9 +2918,12 @@ function NodePanel({
       <div className="node-panel-header">
         <div className="node-panel-header-text">
           <div className="node-panel-location">{describeCell(cellKeyValue)}</div>
-          <div className="node-panel-name">{agent ? agent.name : "待配置节点"}</div>
+          <div className="node-panel-name">
+            {cellAgents.length === 0 ? "待配置节点" : cellAgents.length === 1 ? cellAgents[0].name : `${cellAgents.length} 个 Agent`}
+          </div>
           <div className="node-panel-badges">
-            <span className={`pill ${cellState.className}`}>{cellState.label}</span>
+            <span className={`pill ${cellSt.className}`}>{cellSt.label}</span>
+            {cellAgents.length > 1 && <span className="node-panel-version">{cellAgents.length} 个</span>}
             {agent && <span className="node-panel-version">{agent.version}</span>}
           </div>
         </div>
@@ -2901,9 +2932,16 @@ function NodePanel({
         </button>
       </div>
 
-      {agent ? (
+      {cellAgents.length === 0 ? (
         <div className="node-panel-body">
-          {/* 3 metric cards */}
+          <div className="np-empty-state">
+            <span className="pill planned">待配置</span>
+            <h3>该节点尚未配置 Agent</h3>
+            <p>选择一个 Agent 放置到此节点，完成矩阵覆盖。</p>
+          </div>
+        </div>
+      ) : agent ? (
+        <div className="node-panel-body">
           <div className="np-metrics">
             <div className="np-metric">
               <span className="np-metric-label">当前评分</span>
@@ -2914,29 +2952,22 @@ function NodePanel({
               <strong className="np-metric-value">{statusCopy[agent.status]}</strong>
             </div>
             <div className="np-metric">
-              <span className="np-metric-label">矩阵节点</span>
-              <strong className="np-metric-value">{agent.matrixCellKey ? "已放置" : "未放置"}</strong>
+              <span className="np-metric-label">案例</span>
+              <strong className="np-metric-value">{agent.caseUploaded ? "已上传" : "待上传"}</strong>
             </div>
           </div>
-
-          {/* Mini info rows */}
           <div className="np-mini-grid">
             <span>节点</span>
             <strong>{agent.matrixCellKey ? describeCell(agent.matrixCellKey) : "发布时选择"}</strong>
             <span>案例</span>
             <strong>{agent.caseUploaded ? "已上传模拟案例" : "待上传模拟案例"}</strong>
           </div>
-
           <hr className="np-divider" />
-
-          {/* Input / Output schema */}
           {(agent.inputSchema ?? []).length > 0 && (
             <div className="np-schema-block">
               <div className="np-schema-label">输入字段</div>
               <div className="np-schema-tags">
-                {(agent.inputSchema ?? []).map((f) => (
-                  <span key={f} className="np-schema-tag">{f}</span>
-                ))}
+                {(agent.inputSchema ?? []).map((f) => <span key={f} className="np-schema-tag">{f}</span>)}
               </div>
             </div>
           )}
@@ -2944,22 +2975,62 @@ function NodePanel({
             <div className="np-schema-block">
               <div className="np-schema-label">输出字段</div>
               <div className="np-schema-tags">
-                {(agent.outputSchema ?? []).map((f) => (
-                  <span key={f} className="np-schema-tag">{f}</span>
-                ))}
+                {(agent.outputSchema ?? []).map((f) => <span key={f} className="np-schema-tag">{f}</span>)}
               </div>
             </div>
           )}
-
         </div>
       ) : (
-        <div className="node-panel-body">
-          <div className="np-empty-state">
-            <span className="pill planned">待配置</span>
-            <h3>该节点尚未配置 Agent</h3>
-            <p>选择一个 Agent 放置到此节点，完成矩阵覆盖。</p>
+        /* multi-agent list */
+        <>
+          <div className="npb-stat-strip">
+            <div className="npb-stat-item npb-si-published">
+              <span className="npb-stat-num">{pubCount}</span>
+              <span className="npb-stat-lbl">已发布</span>
+            </div>
+            <div className="npb-stat-divider" />
+            <div className="npb-stat-item npb-si-trained">
+              <span className="npb-stat-num">{trainedCount}</span>
+              <span className="npb-stat-lbl">已训练</span>
+            </div>
+            <div className="npb-stat-divider" />
+            <div className="npb-stat-item">
+              <span className="npb-stat-num">{cellAgents.length - pubCount - trainedCount}</span>
+              <span className="npb-stat-lbl">待训练</span>
+            </div>
           </div>
-        </div>
+          <div className="npb-agent-list">
+            {cellAgents.map((a) => {
+              const sc = a.score >= 85 ? "green" : a.score >= 70 ? "amber" : "red";
+              return (
+                <div key={a.id} className={`npb-agent-card status-border-${STATUS_CLASS_B[a.status]}`}>
+                  <div className="npb-card-top">
+                    <div className="npb-card-left">
+                      <span className="npb-card-name">{a.name}</span>
+                      <div className="npb-card-badges">
+                        <span className={`pill ${a.status === "published" ? "published" : "training"}`}>
+                          {statusCopy[a.status]}
+                        </span>
+                        <span className="npb-card-version">{a.version}</span>
+                        <span className="npb-card-type">{a.type}</span>
+                      </div>
+                    </div>
+                    <div className="npb-card-score-wrap">
+                      <span className={`npb-card-score ${sc}`}>{a.score}</span>
+                      <span className="npb-card-score-lbl">分</span>
+                    </div>
+                  </div>
+                  <div className="npb-card-footer">
+                    <button className="npb-enter-btn" type="button" onClick={() => onOpenAgent(a.id)}>
+                      <ArrowRight size={12} />
+                      进入配置
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
 
       {/* Footer */}
@@ -2972,7 +3043,7 @@ function NodePanel({
         )}
         <button className="np-placement-toggle" type="button" onClick={() => setShowPlacement((v) => !v)}>
           <ChevronDown size={14} style={{ transform: showPlacement ? "rotate(180deg)" : "none", transition: "transform 0.2s" }} />
-          {showPlacement ? "收起" : "调整节点放置"}
+          {showPlacement ? "收起" : "关联 Agent 到节点"}
         </button>
         {showPlacement && (
           <div className="np-placement-area">
@@ -2985,7 +3056,7 @@ function NodePanel({
             </select>
             <button className="secondary-button full" type="button" onClick={() => onPlaceAgent(selectedId, cellKeyValue)}>
               <Save size={16} />
-              放置到该节点
+              关联到该节点
             </button>
           </div>
         )}
@@ -3002,18 +3073,32 @@ const STATUS_CLASS_B: Record<AgentStatus, string> = { draft: "training", trained
 function NodePanelB({
   cellKeyValue,
   agents,
+  allAgents,
   onClose,
   onOpenAgent,
   onNewAgent,
+  onLinkAgent,
   panelRef,
 }: {
   cellKeyValue: string;
   agents: Agent[];
+  allAgents: Agent[];
   onClose: () => void;
   onOpenAgent: (agentId: string) => void;
   onNewAgent: () => void;
+  onLinkAgent: (agentId: string, cellKey: string) => void;
   panelRef: React.RefObject<HTMLElement>;
 }) {
+  const [showLinkPicker, setShowLinkPicker] = useState(false);
+  const [linkId, setLinkId] = useState("");
+  const unlinkedAgents = allAgents.filter((a) => !agents.some((ca) => ca.id === a.id));
+
+  useEffect(() => {
+    setLinkId(unlinkedAgents[0]?.id ?? "");
+    setShowLinkPicker(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cellKeyValue]);
+
   const publishedCount = agents.filter((a) => a.status === "published").length;
   const trainedCount = agents.filter((a) => a.status === "trained").length;
   const draftCount = agents.filter((a) => a.status === "draft").length;
@@ -3074,14 +3159,47 @@ function NodePanelB({
       {/* agent list */}
       <div className="npb-list-header">
         <span>Agent 列表</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span className="npb-list-count">{agents.length} 个</span>
+          <button className="npb-link-agent-btn" type="button" onClick={() => setShowLinkPicker((v) => !v)}>
+            <Link2 size={12} />
+            关联
+          </button>
           <button className="npb-new-agent-btn" type="button" onClick={onNewAgent}>
             <Plus size={12} />
-            新建 Agent
+            新建
           </button>
         </div>
       </div>
+      {showLinkPicker && (
+        <div className="npb-link-picker">
+          {unlinkedAgents.length === 0 ? (
+            <p className="npb-link-empty">所有 Agent 已关联到该节点</p>
+          ) : (
+            <>
+              <select
+                className="npb-link-select"
+                value={linkId}
+                onChange={(e) => setLinkId(e.target.value)}
+              >
+                {unlinkedAgents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} / {statusCopy[a.status]}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="secondary-button full"
+                type="button"
+                onClick={() => { onLinkAgent(linkId, cellKeyValue); setShowLinkPicker(false); }}
+              >
+                <Save size={13} />
+                关联到此节点
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="npb-agent-list">
         {agents.length === 0 ? (
@@ -3128,10 +3246,12 @@ function MatrixPageB({
   agents,
   onOpenAgent,
   onNewAgent,
+  onLinkAgent,
 }: {
   agents: Agent[];
   onOpenAgent: (agentId: string) => void;
   onNewAgent: () => void;
+  onLinkAgent: (agentId: string, cellKey: string) => void;
 }) {
   const [selectedCellKey, setSelectedCellKey] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -3325,9 +3445,11 @@ function MatrixPageB({
           <NodePanelB
             cellKeyValue={selectedCellKey}
             agents={selectedAgents}
+            allAgents={agents}
             onClose={() => setSelectedCellKey(null)}
             onOpenAgent={onOpenAgent}
             onNewAgent={onNewAgent}
+            onLinkAgent={onLinkAgent}
             panelRef={panelRef}
           />
         )}
@@ -3338,6 +3460,9 @@ function MatrixPageB({
           const draft = tooltip.agents.filter((a) => a.status === "draft").length;
           const total = tooltip.agents.length;
           const readyPct = Math.round((pub / total) * 100);
+          const [wId, fId] = tooltip.key.split(":");
+          const wLabel = workFlows.find((w) => w.id === wId)?.label ?? wId;
+          const fLabel = functionalFlows.find((f) => f.id === fId)?.label ?? fId;
           return (
             <div
               className="b-hover-card"
@@ -3345,6 +3470,7 @@ function MatrixPageB({
               onMouseEnter={() => { if (tooltipTimer.current) clearTimeout(tooltipTimer.current); }}
               onMouseLeave={hideTooltip}
             >
+              <div className="bhc-cell-name">{wLabel} × {fLabel}</div>
               <div className="bhc-header">
                 <span className="bhc-total">{total} 个 Agent</span>
                 <span className="bhc-ready-pct">{readyPct}% 就绪</span>
